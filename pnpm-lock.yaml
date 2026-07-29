@@ -402,9 +402,33 @@ importers:
 
   packages/verification-detector:
     devDependencies:
+      "@types/express":
+        specifier: ^4.17.21
+        version: 4.17.25
+      "@types/node":
+        specifier: ^22.5.0
+        version: 22.20.1
+      "@types/supertest":
+        specifier: ^6.0.2
+        version: 6.0.3
+      "@uber-automation/mock-server":
+        specifier: workspace:*
+        version: link:../../apps/mock-server
+      playwright:
+        specifier: ^1.46.1
+        version: 1.62.0
+      supertest:
+        specifier: ^7.0.0
+        version: 7.2.2
+      tsx:
+        specifier: ^4.19.0
+        version: 4.23.1
       typescript:
         specifier: ^5.5.4
         version: 5.9.3
+      vitest:
+        specifier: ^2.0.5
+        version: 2.1.9(@types/node@22.20.1)
 
 packages:
   "@alloc/quick-lru@5.2.0":

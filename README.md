@@ -62,6 +62,20 @@ escolhido pela plataforma, ou cancele/recrie cadastros automaticamente.
   "resolve" essas etapas. Veja a seção [Mock Uber server](#mock-uber-server-fase-3)
   mais abaixo.
 
+## Fase 4 — o que já existe
+
+- **VerificationFlowDetector** (`packages/verification-detector`): módulo
+  **exclusivamente informativo** que identifica qual provedor de verificação está
+  sendo apresentado (Socure, outro provedor nomeado, provedor genérico não
+  catalogado, a própria Uber, ou desconhecido) a partir de URL, domínio, título,
+  texto visível, atributos HTML, nomes de script e recursos carregados - nunca
+  interage com, contorna ou influencia a verificação em si. Também classifica
+  páginas de desafio (CAPTCHA/2FA/bloqueio de segurança) como uma categoria distinta
+  de "página de verificação de identidade". Validado com **100% de acerto (8/8)**
+  contra o HTML real de todos os cenários da Fase 3 (não fixtures escritas à mão) -
+  ver [`packages/verification-detector/README.md`](./packages/verification-detector/README.md)
+  e o [relatório de precisão](./packages/verification-detector/ACCURACY_REPORT.md).
+
 ## Estrutura
 
 ```
@@ -79,8 +93,8 @@ uber-automation/
 │   ├── proxy-manager/            # Teste de conectividade de proxy
 │   ├── automation/                # BrowserProfileManager (sessões isoladas)
 │   ├── email-service/              # EmailVerificationWorker (Gmail via Playwright)
-│   ├── verification-detector/       # (stub — Fase 4+)
-│   └── platform-adapters/            # (stub — Fase 3+, preenchimento do form Uber)
+│   ├── verification-detector/       # VerificationFlowDetector (deteção informativa de provedor)
+│   └── platform-adapters/            # (stub — Fase 5+, preenchimento do form Uber)
 └── infra/docker/    # Dockerfiles e docker-compose.yml
 ```
 
@@ -150,7 +164,7 @@ uber-automation/
 pnpm test
 ```
 
-114 testes, nenhum exige Postgres/Redis reais (usam fakes/mocks injetados via DI - ver
+138 testes, nenhum exige Postgres/Redis reais (usam fakes/mocks injetados via DI - ver
 `packages/*/src/**/*.test.ts` e `apps/*/src/**/*.test.ts`). Cobrem:
 
 - Validações de importação (`packages/shared`): email inválido, duplicidade no arquivo,
@@ -173,6 +187,13 @@ pnpm test
   nunca têm um controle habilitado (sem bypass funcional), Socure e o outro provedor
   são claramente distinguíveis e a página "desconhecido" nunca identifica nenhum dos
   dois.
+- **VerificationFlowDetector (Fase 4)** (`packages/verification-detector`): 15 testes
+  com fixtures realistas (não o markup do nosso próprio mock, para provar que
+  generaliza) cobrindo Socure/concorrente nomeado/desconhecido/Uber interna, sinal
+  forte nunca perdendo para sinal fraco conflitante; mais 9 testes de integração que
+  buscam o HTML real do `apps/mock-server` via `supertest` e rodam o detector contra
+  ele - inclui os 8 cenários da Fase 4 e a página de login (nunca classificada como
+  verificação/desafio).
 
 Validações que dependem do banco (duplicidade já existente na empresa, proxy
 inexistente, e-mail já associado a outro motorista) são testadas na camada de serviço da
@@ -351,12 +372,13 @@ de chave).
   retentado - o job é descartado via `job.discard()` e o motorista passa para
   `AWAITING_HUMAN_ACTION`, que já aparece no dashboard/listagem existentes).
 
-## Próximos passos (Fase 4+)
+## Próximos passos (Fase 5+)
 
 Consulte as fases seguintes conforme forem detalhadas. Com o ambiente de testes local
-(Fase 3) no lugar, a Fase 4 deve implementar as etapas de preenchimento do formulário em
-`packages/platform-adapters` (hoje um stub) contra o `apps/mock-server`, conectá-las à
-fila `automation-jobs` (hoje só executa o passo `AWAIT_EMAIL_CODE`), e usar
-`packages/verification-detector` para classificar as páginas terminais simuladas
-(Socure/outro provedor/desconhecido) antes de qualquer tentativa de conexão com a Uber
-real.
+(Fase 3) e o detector de provedor (Fase 4) no lugar, a próxima fase deve implementar as
+etapas de preenchimento do formulário em `packages/platform-adapters` (hoje um stub)
+contra o `apps/mock-server`, conectá-las à fila `automation-jobs` (hoje só executa o
+passo `AWAIT_EMAIL_CODE`), e usar o `VerificationFlowDetector` já validado para decidir,
+a cada etapa: continuar preenchendo dados administrativos, ou parar e marcar
+`AWAITING_HUMAN_ACTION` assim que uma página de foto/CNH/CAPTCHA/2FA/bloqueio for
+detectada - nunca tentando prosseguir sozinha por essas etapas.
