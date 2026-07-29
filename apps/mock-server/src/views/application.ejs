@@ -1,0 +1,50 @@
+<%- include('partials/head', { title: 'Cadastro administrativo' }) %>
+<div class="card">
+  <h1>Complete seu cadastro</h1>
+  <p class="subtitle">Preencha seus dados administrativos para continuar.</p>
+
+  <% if (error) { %>
+  <div class="error" data-testid="application-error"><%= error %></div>
+  <% } %>
+
+  <form method="post" action="/mock-uber/application<%= scenarioQuery %>" data-testid="application-form">
+    <label for="fullName">Nome completo</label>
+    <input type="text" id="fullName" name="fullName" required data-testid="application-full-name" value="<%= values.fullName || '' %>" />
+
+    <label for="email">E-mail</label>
+    <input type="email" id="email" name="email" required data-testid="application-email" value="<%= values.email || '' %>" />
+
+    <label for="phone">Telefone</label>
+    <input type="tel" id="phone" name="phone" required data-testid="application-phone" value="<%= values.phone || '' %>" />
+
+    <label for="address">Endereço</label>
+    <input type="text" id="address" name="address" required data-testid="application-address" value="<%= values.address || '' %>" />
+
+    <div class="row">
+      <div>
+        <label for="city">Cidade</label>
+        <input type="text" id="city" name="city" required data-testid="application-city" value="<%= values.city || '' %>" />
+      </div>
+      <div>
+        <label for="state">Estado</label>
+        <input type="text" id="state" name="state" maxlength="2" required data-testid="application-state" value="<%= values.state || '' %>" />
+      </div>
+    </div>
+
+    <label for="postalCode">CEP</label>
+    <input type="text" id="postalCode" name="postalCode" required data-testid="application-postal-code" value="<%= values.postalCode || '' %>" />
+
+    <label for="vehicleType">Tipo de veículo</label>
+    <select id="vehicleType" name="vehicleType" required data-testid="application-vehicle-type">
+      <option value="">Selecione</option>
+      <option value="sedan" <%= values.vehicleType === 'sedan' ? 'selected' : '' %>>Sedan</option>
+      <option value="suv" <%= values.vehicleType === 'suv' ? 'selected' : '' %>>SUV</option>
+      <option value="hatch" <%= values.vehicleType === 'hatch' ? 'selected' : '' %>>Hatch</option>
+    </select>
+
+    <button type="submit" data-testid="application-submit">Continuar</button>
+  </form>
+
+  <%- include('partials/scenario-picker', { current: scenario, scenarioPaths: scenarioPaths }) %>
+</div>
+<%- include('partials/foot') %>

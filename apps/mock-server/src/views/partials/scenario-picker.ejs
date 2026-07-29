@@ -1,0 +1,8 @@
+<div class="scenario-picker" data-testid="scenario-picker">
+  Cenário ao final do fluxo (após verificar o e-mail):
+  <strong data-testid="current-scenario"><%= current %></strong>
+  <br />
+  <% Object.entries(scenarioPaths).forEach(function(entry) { %>
+    <a href="?scenario=<%= entry[0] %>" data-testid="scenario-link-<%= entry[0] %>"><%= entry[0] %></a>&nbsp;
+  <% }) %>
+</div>

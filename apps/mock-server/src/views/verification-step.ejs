@@ -1,0 +1,44 @@
+<%- include('partials/head', { title: title }) %>
+<div class="card" data-testid="verification-step" data-step-type="<%= stepType %>" data-provider="<%= provider %>">
+  <h1><%= title %></h1>
+
+  <% if (provider !== 'unknown') { %>
+  <div class="provider-card" data-testid="provider-card">
+    <div class="provider-logo provider-logo--<%= provider %>" data-testid="provider-logo"><%= providerInitials %></div>
+    <div>
+      <div class="provider-name" data-testid="provider-name"><%= providerName %></div>
+      <div class="provider-hint">Provedor de verificação de identidade</div>
+    </div>
+  </div>
+  <% } else { %>
+  <div class="notice" data-testid="provider-unknown-notice">
+    Não é possível identificar com clareza qual provedor está processando esta
+    etapa. Isso exige revisão manual antes de prosseguir.
+  </div>
+  <% } %>
+
+  <p class="subtitle" data-testid="step-instructions"><%= instructions %></p>
+
+  <% actions.forEach(function(action) { %>
+  <button
+    type="button"
+    class="btn-secondary"
+    data-testid="<%= action.testid %>"
+    onclick="var m=document.querySelector('[data-testid=human-required-message]'); m.scrollIntoView({behavior:'smooth'}); m.style.outline='2px solid #d92d20';"
+  >
+    <%= action.label %>
+  </button>
+  <% }) %>
+
+  <!-- Nao ha nenhuma rota de servidor que aceite upload/selfie real aqui - os
+       botoes acima nunca enviam nada, apenas realcam a mensagem abaixo. -->
+  <div class="human-required" data-testid="human-required-message"><%= humanMessage %></div>
+
+  <% if (fakeScriptSrc) { %>
+  <!-- Simula o carregamento do SDK do provedor (dominio real simulado: <%= simulatedDomain %>).
+       Nunca carrega nada de um dominio de terceiros de verdade - apenas um
+       arquivo local que serve como marcador para o detector de provedor. -->
+  <script src="<%= fakeScriptSrc %>" data-simulated-domain="<%= simulatedDomain %>"></script>
+  <% } %>
+</div>
+<%- include('partials/foot') %>

@@ -1,0 +1,19 @@
+<%- include('partials/head', { title: 'Verificação de segurança' }) %>
+<div class="card" data-testid="captcha-page">
+  <h1>Prove que você é humano</h1>
+  <p class="subtitle">Complete a verificação abaixo para continuar.</p>
+
+  <div class="captcha-box" data-testid="captcha-mock-widget">
+    <input type="checkbox" id="captcha-checkbox" data-testid="captcha-checkbox" disabled />
+    <label for="captcha-checkbox" style="margin:0;font-weight:400;">Não sou um robô</label>
+    <span style="margin-left:auto;font-size:11px;color:#98a2b3;">reCAPTCHA (simulado)</span>
+  </div>
+
+  <!-- Este checkbox e proposital e permanentemente desabilitado: nao existe
+       nenhuma rota ou script neste servidor que resolva ou contorne o
+       CAPTCHA de forma automatica. -->
+  <div class="human-required" data-testid="human-required-message">
+    Este desafio exige verificação manual por uma pessoa. A automação para aqui.
+  </div>
+</div>
+<%- include('partials/foot') %>

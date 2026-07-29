@@ -1,0 +1,34 @@
+<%- include('partials/head', { title: 'Verificação de e-mail' }) %>
+<div class="card">
+  <h1>Verifique seu e-mail</h1>
+  <p class="subtitle">Enviamos um código de 6 dígitos para <strong><%= email %></strong>.</p>
+
+  <div class="test-banner" data-testid="test-code-banner" data-test-code="<%= code %>">
+    MODO TESTE — código gerado: <strong data-testid="test-code-value"><%= code %></strong>
+    (em produção isso viria por e-mail real, nunca aparece na tela)
+  </div>
+
+  <% if (error) { %>
+  <div class="error" data-testid="email-verification-error"><%= error %></div>
+  <% } %>
+
+  <form method="post" action="/mock-uber/email-verification<%= scenarioQuery %>" data-testid="email-verification-form">
+    <label for="code">Código de confirmação</label>
+    <input
+      type="text"
+      id="code"
+      name="code"
+      inputmode="numeric"
+      pattern="[0-9]{6}"
+      maxlength="6"
+      required
+      class="code-input"
+      data-testid="email-verification-code"
+    />
+
+    <button type="submit" data-testid="email-verification-submit">Verificar</button>
+  </form>
+
+  <%- include('partials/scenario-picker', { current: scenario, scenarioPaths: scenarioPaths }) %>
+</div>
+<%- include('partials/foot') %>

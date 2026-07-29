@@ -1,0 +1,27 @@
+<%- include('partials/head', { title: 'Autenticação em duas etapas' }) %>
+<div class="card" data-testid="two-factor-page">
+  <h1>Autenticação em Dois Fatores</h1>
+  <p class="subtitle">
+    Enviamos um código por SMS para o telefone cadastrado. Digite-o para continuar.
+  </p>
+
+  <label for="sms-code">Código recebido por SMS</label>
+  <input
+    type="text"
+    id="sms-code"
+    class="code-input"
+    inputmode="numeric"
+    maxlength="6"
+    data-testid="two-factor-code"
+    disabled
+  />
+
+  <!-- O campo e o botao ficam desabilitados de proposito: este ambiente de
+       teste nunca tenta gerar, interceptar ou burlar um codigo de SMS real. -->
+  <button type="button" data-testid="two-factor-submit" disabled>Verificar</button>
+
+  <div class="human-required" data-testid="human-required-message">
+    Este desafio exige verificação manual por uma pessoa. A automação para aqui.
+  </div>
+</div>
+<%- include('partials/foot') %>

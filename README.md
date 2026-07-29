@@ -50,6 +50,18 @@ escolhido pela plataforma, ou cancele/recrie cadastros automaticamente.
   erros que exigem humano (CAPTCHA, bloqueio, 2FA, verificação de identidade etc. -
   nunca retentados automaticamente).
 
+## Fase 3 — o que já existe
+
+- **Mock Uber server** (`apps/mock-server`, porta 3001): páginas HTML que simulam o
+  fluxo de cadastro da Uber (login → formulário administrativo → verificação de e-mail
+  → uma de 8 etapas terminais) para testar a automação sem tocar a plataforma real.
+  Cobre os cenários: foto de perfil (Socure / outro provedor / desconhecido), CNH
+  (Socure / outro provedor), CAPTCHA, 2FA e bloqueio de segurança. As páginas terminais
+  não têm nenhum caminho funcional de bypass (botões desabilitados ou inertes) - servem
+  para validar que a automação **para** corretamente, nunca para simular que ela
+  "resolve" essas etapas. Veja a seção [Mock Uber server](#mock-uber-server-fase-3)
+  mais abaixo.
+
 ## Estrutura
 
 ```
@@ -57,7 +69,8 @@ uber-automation/
 ├── apps/
 │   ├── web/        # Painel administrativo (Next.js)
 │   ├── api/         # Backend REST (Express)
-│   └── worker/       # Worker BullMQ (fila automation-jobs)
+│   ├── worker/       # Worker BullMQ (fila automation-jobs)
+│   └── mock-server/   # Simulador local do fluxo de cadastro da Uber (Fase 3)
 ├── packages/
 │   ├── database/              # Schemas Drizzle, migrations, client, sink de auditoria
 │   ├── security/               # bcrypt, AES-256-GCM, JWT, AuditLogger, mascaramento
@@ -120,6 +133,7 @@ uber-automation/
    pnpm dev:api      # http://localhost:4000
    pnpm dev:web      # http://localhost:3000
    pnpm dev:worker
+   pnpm dev:mock     # http://localhost:3001 - simulador Uber (Fase 3), opcional
    ```
 
    Ou tudo via Docker Compose:
@@ -136,7 +150,7 @@ uber-automation/
 pnpm test
 ```
 
-96 testes, nenhum exige Postgres/Redis reais (usam fakes/mocks injetados via DI - ver
+114 testes, nenhum exige Postgres/Redis reais (usam fakes/mocks injetados via DI - ver
 `packages/*/src/**/*.test.ts` e `apps/*/src/**/*.test.ts`). Cobrem:
 
 - Validações de importação (`packages/shared`): email inválido, duplicidade no arquivo,
@@ -153,11 +167,90 @@ pnpm test
   (`browserProfileManager.test.ts`), pausa (não repete) em 2FA/CAPTCHA
   (`emailVerificationWorker.test.ts`, `processor.test.ts`), limites de concorrência e
   backoff da fila (`concurrencyLimiter.test.ts`, `processor.test.ts`).
+- **Mock Uber server (Fase 3)** (`apps/mock-server/src/app.test.ts`): fluxo completo
+  login → formulário → e-mail → cenário terminal, roteamento por `?scenario=`, as 8
+  páginas terminais respondem 200 com o `data-testid` esperado, CAPTCHA/2FA/bloqueio
+  nunca têm um controle habilitado (sem bypass funcional), Socure e o outro provedor
+  são claramente distinguíveis e a página "desconhecido" nunca identifica nenhum dos
+  dois.
 
 Validações que dependem do banco (duplicidade já existente na empresa, proxy
 inexistente, e-mail já associado a outro motorista) são testadas na camada de serviço da
 API contra um Postgres real; suba `docker compose up -d postgres` antes de rodar testes
 de integração adicionais que você queira escrever sobre essa camada.
+
+## Mock Uber server (Fase 3)
+
+Servidor Express local (`apps/mock-server`, porta padrão `3001`) que simula o fluxo de
+cadastro de motorista parceiro da Uber, para testar a automação sem qualquer risco de
+afetar contas reais. **Não é uma cópia da Uber real** - é uma ferramenta de teste com
+páginas próprias, claramente marcadas como "AMBIENTE DE TESTE".
+
+```bash
+pnpm dev:mock   # http://localhost:3001
+```
+
+### Fluxo
+
+```
+/mock-uber/login              (aceita qualquer e-mail/senha)
+  -> /mock-uber/application    (formulário administrativo)
+  -> /mock-uber/email-verification   (código de 6 dígitos - exibido na tela,
+                                       banner "MODO TESTE", nunca em produção)
+  -> /mock-uber/next-step      (redireciona para o cenário configurado)
+```
+
+O cenário final é escolhido via `?scenario=<nome>` em qualquer página do fluxo (fica
+salvo na sessão) e também pode ser acessado diretamente, sem passar pelo fluxo, para
+testar uma página isolada:
+
+| Cenário                 | URL direta                         | O que simula                                          |
+| ----------------------- | ---------------------------------- | ----------------------------------------------------- |
+| `photo-socure` (padrão) | `/mock-uber/profile-photo-socure`  | Foto de perfil via Socure                             |
+| `photo-other`           | `/mock-uber/profile-photo-other`   | Foto de perfil via outro provedor ("Verificador XYZ") |
+| `photo-unknown`         | `/mock-uber/profile-photo-unknown` | Foto de perfil, provedor não identificável            |
+| `license-socure`        | `/mock-uber/driver-license-socure` | CNH via Socure                                        |
+| `license-other`         | `/mock-uber/driver-license-other`  | CNH via outro provedor                                |
+| `captcha`               | `/mock-uber/captcha`               | CAPTCHA                                               |
+| `2fa`                   | `/mock-uber/two-factor`            | Autenticação em duas etapas (SMS)                     |
+| `block`                 | `/mock-uber/security-block`        | Bloqueio de segurança / atividade suspeita            |
+
+Exemplo - testar o cenário de CAPTCHA do zero:
+
+```
+http://localhost:3001/mock-uber/login?scenario=captcha
+```
+
+Ou visitar a página terminal diretamente, sem passar pelo login:
+
+```
+http://localhost:3001/mock-uber/captcha
+```
+
+### Garantias das páginas terminais (photo-_, license-_, captcha, 2fa, security-block)
+
+- **Nenhuma tem um caminho funcional de avanço automático.** Os campos/botões de
+  CAPTCHA e 2FA são `disabled` no HTML; os botões de selfie/upload das páginas de
+  foto/CNH não enviam nada a lugar nenhum (apenas realçam a mensagem "complete esta
+  etapa pessoalmente"); a página de bloqueio não tem nenhum `<form>`. Isso é
+  verificado em `apps/mock-server/src/app.test.ts`.
+- **Socure vs. outro provedor são claramente distinguíveis** (`data-provider`,
+  nome do provedor visível, script simulado próprio) - a página "desconhecido" nunca
+  menciona nenhum dos dois nomes, propositalmente, para exercitar o caminho de
+  "provedor não identificado" do `packages/verification-detector`.
+- Nenhum script carrega de um domínio de terceiros real - `socure.com` e
+  `verificador-xyz.com` são apenas comentários/atributos `data-simulated-domain`; os
+  arquivos JS de fato servidos são locais (`public/fake-sdk/*.fake.js`).
+- O código de verificação de e-mail é gerado aleatoriamente por sessão e exibido na
+  própria tela (banner "MODO TESTE") e via `GET /mock-uber/__test__/state` - só nesta
+  ferramenta de teste; nunca é assim em produção.
+
+### Identificadores para automação (Playwright)
+
+Todo elemento relevante tem `data-testid` estável (`login-form`, `login-email`,
+`application-submit`, `email-verification-code`, `provider-name`, `human-required-message`
+etc.) e as páginas terminais expõem `data-step-type` e `data-provider` no card
+principal - use esses seletores em vez de texto visível, que pode mudar.
 
 ## Configuração do CredentialVault (Fase 2)
 
@@ -258,9 +351,12 @@ de chave).
   retentado - o job é descartado via `job.discard()` e o motorista passa para
   `AWAITING_HUMAN_ACTION`, que já aparece no dashboard/listagem existentes).
 
-## Próximos passos (Fase 3+)
+## Próximos passos (Fase 4+)
 
-Consulte as fases seguintes conforme forem detalhadas. A Fase 3 deve implementar as
-etapas de preenchimento do formulário da Uber em `packages/platform-adapters` (hoje um
-stub) e conectá-las à fila `automation-jobs` (hoje só executa o passo
-`AWAIT_EMAIL_CODE`).
+Consulte as fases seguintes conforme forem detalhadas. Com o ambiente de testes local
+(Fase 3) no lugar, a Fase 4 deve implementar as etapas de preenchimento do formulário em
+`packages/platform-adapters` (hoje um stub) contra o `apps/mock-server`, conectá-las à
+fila `automation-jobs` (hoje só executa o passo `AWAIT_EMAIL_CODE`), e usar
+`packages/verification-detector` para classificar as páginas terminais simuladas
+(Socure/outro provedor/desconhecido) antes de qualquer tentativa de conexão com a Uber
+real.

@@ -1,0 +1,20 @@
+<%- include('partials/head', { title: 'Conta bloqueada' }) %>
+<div class="card" data-testid="security-block-page">
+  <div class="block-message">
+    <div class="block-icon" aria-hidden="true">⛔</div>
+    <h1>Atividade Suspeita Detectada</h1>
+    <p class="subtitle">
+      Sua conta foi temporariamente bloqueada por motivos de segurança.
+    </p>
+  </div>
+
+  <div class="human-required" data-testid="human-required-message">
+    Este bloqueio exige contato com o suporte por uma pessoa. A automação para
+    aqui e não tenta contornar, repetir ou recriar o cadastro.
+  </div>
+
+  <button type="button" class="btn-secondary" data-testid="contact-support-button">
+    Contatar Suporte
+  </button>
+</div>
+<%- include('partials/foot') %>

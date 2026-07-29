@@ -13,6 +13,7 @@
     "dev:api": "pnpm --filter @uber-automation/api dev",
     "dev:web": "pnpm --filter @uber-automation/web dev",
     "dev:worker": "pnpm --filter @uber-automation/worker dev",
+    "dev:mock": "pnpm --filter @uber-automation/mock-server dev",
     "db:generate": "pnpm --filter @uber-automation/database db:generate",
     "db:migrate": "pnpm --filter @uber-automation/database db:migrate",
     "db:seed": "pnpm --filter @uber-automation/database db:seed",

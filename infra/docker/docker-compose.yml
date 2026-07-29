@@ -79,6 +79,16 @@ services:
     depends_on:
       - api
 
+  mock-server:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.mock-server
+    restart: unless-stopped
+    env_file:
+      - ../../.env
+    ports:
+      - "${MOCK_SERVER_PORT:-3001}:3001"
+
 volumes:
   postgres_data:
   redis_data:

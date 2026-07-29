@@ -1,0 +1,33 @@
+<%- include('partials/head', { title: 'Entrar' }) %>
+<div class="card">
+  <h1>Entrar</h1>
+  <p class="subtitle">Acesse sua conta de motorista parceiro para continuar o cadastro.</p>
+
+  <% if (error) { %>
+  <div class="error" data-testid="login-error"><%= error %></div>
+  <% } %>
+
+  <form method="post" action="/mock-uber/login<%= scenarioQuery %>" data-testid="login-form">
+    <label for="email">E-mail</label>
+    <input type="email" id="email" name="email" required data-testid="login-email" autocomplete="email" />
+
+    <label for="password">Senha</label>
+    <input
+      type="password"
+      id="password"
+      name="password"
+      required
+      data-testid="login-password"
+      autocomplete="current-password"
+    />
+
+    <button type="submit" data-testid="login-submit">Entrar</button>
+  </form>
+
+  <p class="notice" data-testid="login-hint">
+    Ambiente de teste: qualquer e-mail e senha são aceitos.
+  </p>
+
+  <%- include('partials/scenario-picker', { current: scenario, scenarioPaths: scenarioPaths }) %>
+</div>
+<%- include('partials/foot') %>
