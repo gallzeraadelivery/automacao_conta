@@ -26,9 +26,13 @@ Thumbs.db
 
 # playwright / browser profiles (sensitive, never commit)
 **/browser-profiles/
+storage/
 **/.auth/
 playwright-report/
 test-results/
+
+# credential vault master key (local fallback - never commit)
+.secrets.key
 
 # drizzle
 packages/database/drizzle/meta/

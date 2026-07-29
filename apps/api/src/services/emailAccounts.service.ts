@@ -1,6 +1,6 @@
 import { and, eq, inArray, or } from "drizzle-orm";
 import { db, applicants, emailAccounts } from "@uber-automation/database";
-import { sealSecret } from "@uber-automation/credential-vault";
+import { createCredentialVault } from "../lib/credentialVault";
 import {
   validateEmailAccountImportRows,
   type EmailAccountImportRow,
@@ -150,18 +150,20 @@ export async function importEmailAccounts(companyId: string, rawRows: unknown[])
     return { imported: 0, skipped: check.invalidRows.length, invalidRows: check.invalidRows };
   }
 
-  const rowsToInsert = check.validRows.map(({ applicantId, data }) => {
-    const sealed = sealSecret(data.password);
-    return {
+  const vault = createCredentialVault(companyId);
+  const rowsToInsert = [];
+  for (const { applicantId, data } of check.validRows) {
+    const sealed = await vault.encrypt(data.password, { applicantId });
+    rowsToInsert.push({
       companyId,
       applicantId,
       emailAddress: data.email_address.toLowerCase(),
-      encryptedPassword: sealed.encrypted,
+      encryptedPassword: sealed.ciphertext,
       encryptionIv: sealed.iv,
       encryptionAuthTag: sealed.authTag,
       provider: data.provider ?? "gmail",
-    };
-  });
+    });
+  }
 
   await db.insert(emailAccounts).values(rowsToInsert);
 
@@ -172,24 +174,31 @@ export async function importEmailAccounts(companyId: string, rawRows: unknown[])
   };
 }
 
+/**
+ * Colunas seguras para listagem - nunca inclui encryptedPassword/
+ * encryptionIv/encryptionAuthTag. Exportado para que o teste de segurança
+ * (security.test.ts) verifique isso sem precisar de um Postgres real.
+ */
+export const EMAIL_ACCOUNT_LIST_COLUMNS = {
+  id: emailAccounts.id,
+  applicantId: emailAccounts.applicantId,
+  emailAddress: emailAccounts.emailAddress,
+  provider: emailAccounts.provider,
+  loginStatus: emailAccounts.loginStatus,
+  failedLoginAttempts: emailAccounts.failedLoginAttempts,
+  requiresHumanAction: emailAccounts.requiresHumanAction,
+  lastLoginAt: emailAccounts.lastLoginAt,
+  lastCodeReceivedAt: emailAccounts.lastCodeReceivedAt,
+  createdAt: emailAccounts.createdAt,
+};
+
 export async function listEmailAccounts(
   companyId: string,
   params: { page: number; pageSize: number },
 ) {
   const offset = (params.page - 1) * params.pageSize;
   const rows = await db
-    .select({
-      id: emailAccounts.id,
-      applicantId: emailAccounts.applicantId,
-      emailAddress: emailAccounts.emailAddress,
-      provider: emailAccounts.provider,
-      loginStatus: emailAccounts.loginStatus,
-      failedLoginAttempts: emailAccounts.failedLoginAttempts,
-      requiresHumanAction: emailAccounts.requiresHumanAction,
-      lastLoginAt: emailAccounts.lastLoginAt,
-      lastCodeReceivedAt: emailAccounts.lastCodeReceivedAt,
-      createdAt: emailAccounts.createdAt,
-    })
+    .select(EMAIL_ACCOUNT_LIST_COLUMNS)
     .from(emailAccounts)
     .where(eq(emailAccounts.companyId, companyId))
     .limit(params.pageSize)

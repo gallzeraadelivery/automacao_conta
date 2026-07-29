@@ -1,6 +1,7 @@
 /**
  * Automacao de navegador (Playwright) para preenchimento administrativo do
- * cadastro do motorista - implementada nas proximas fases.
+ * cadastro do motorista - a orquestracao completa das etapas do formulario
+ * chega na Fase 3, junto com @uber-automation/platform-adapters.
  *
  * Regras invariaveis para toda a logica adicionada aqui:
  * - Preenche apenas dados administrativos (nome, email, telefone, endereco, CEP, tipo de veiculo).
@@ -11,3 +12,8 @@
  *   nunca altera o provedor de verificacao escolhido pela plataforma.
  */
 export const AUTOMATION_PACKAGE_PLACEHOLDER = true;
+
+export * from "./browserProfile.types";
+export { BrowserProfileManager, type BrowserProfileManagerOptions } from "./browserProfileManager";
+export { DrizzleBrowserProfileRepository } from "./browserProfileRepository.drizzle";
+export * from "./profileStorage";

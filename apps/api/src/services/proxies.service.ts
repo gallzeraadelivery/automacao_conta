@@ -1,15 +1,25 @@
 import { and, eq } from "drizzle-orm";
 import { db, proxyConfigs } from "@uber-automation/database";
-import { sealSecret, unsealSecret } from "@uber-automation/credential-vault";
+import type { CredentialVault } from "@uber-automation/credential-vault";
 import { testProxyConnectivity } from "@uber-automation/proxy-manager";
 import type { CreateProxyInput } from "@uber-automation/shared";
 import { HttpError } from "../middleware/errorHandler";
+import { createCredentialVault } from "../lib/credentialVault";
 
 interface ProxySecretBlob {
   host: string;
   username?: string;
   password?: string;
 }
+
+/**
+ * Proxies sao um recurso da empresa, nao de um motorista especifico - mas o
+ * ICredentialVault exige um `applicantId` no contexto (para correlacionar o
+ * evento de auditoria a um motorista quando aplicavel). Como nao ha um
+ * motorista especifico aqui, usamos um identificador sentinela para deixar
+ * claro nos logs de auditoria que o acesso e a nivel de proxy da empresa.
+ */
+const PROXY_CREDENTIAL_CONTEXT = { applicantId: "system:proxy" };
 
 /**
  * A tabela proxy_configs tem um unico par (encryption_iv, encryption_auth_tag)
@@ -22,20 +32,28 @@ interface ProxySecretBlob {
  * schema, reservadas caso o time prefira futuramente migrar para IVs
  * individuais por campo).
  */
-function sealProxySecrets(blob: ProxySecretBlob) {
-  return sealSecret(JSON.stringify(blob));
+async function sealProxySecrets(
+  vault: CredentialVault,
+  proxyId: string | undefined,
+  blob: ProxySecretBlob,
+) {
+  return vault.encrypt(JSON.stringify(blob), PROXY_CREDENTIAL_CONTEXT, proxyId);
 }
 
-function unsealProxySecrets(row: {
-  hostEncrypted: string;
-  encryptionIv: string;
-  encryptionAuthTag: string;
-}): ProxySecretBlob {
-  const json = unsealSecret({
-    encrypted: row.hostEncrypted,
-    iv: row.encryptionIv,
-    authTag: row.encryptionAuthTag,
-  });
+async function unsealProxySecrets(
+  vault: CredentialVault,
+  row: { id: string; hostEncrypted: string; encryptionIv: string; encryptionAuthTag: string },
+): Promise<ProxySecretBlob> {
+  const json = await vault.decrypt(
+    {
+      ciphertext: row.hostEncrypted,
+      iv: row.encryptionIv,
+      authTag: row.encryptionAuthTag,
+      algorithm: "AES-256-GCM",
+    },
+    PROXY_CREDENTIAL_CONTEXT,
+    row.id,
+  );
   return JSON.parse(json) as ProxySecretBlob;
 }
 
@@ -50,7 +68,7 @@ export interface ProxyPublicView {
   createdAt: Date;
 }
 
-function toPublicView(row: typeof proxyConfigs.$inferSelect): ProxyPublicView {
+export function toPublicView(row: typeof proxyConfigs.$inferSelect): ProxyPublicView {
   return {
     id: row.id,
     port: row.port,
@@ -67,7 +85,8 @@ export async function createProxy(
   companyId: string,
   input: CreateProxyInput,
 ): Promise<ProxyPublicView> {
-  const sealed = sealProxySecrets({
+  const vault = createCredentialVault(companyId);
+  const sealed = await sealProxySecrets(vault, undefined, {
     host: input.host,
     username: input.username,
     password: input.password,
@@ -77,7 +96,7 @@ export async function createProxy(
     .insert(proxyConfigs)
     .values({
       companyId,
-      hostEncrypted: sealed.encrypted,
+      hostEncrypted: sealed.ciphertext,
       port: input.port,
       protocol: input.protocol,
       encryptionIv: sealed.iv,
@@ -106,7 +125,8 @@ export async function testProxy(companyId: string, proxyId: string): Promise<Pro
     throw new HttpError(404, "NOT_FOUND", "Proxy não encontrado");
   }
 
-  const secrets = unsealProxySecrets(row);
+  const vault = createCredentialVault(companyId);
+  const secrets = await unsealProxySecrets(vault, row);
 
   const result = await testProxyConnectivity({
     host: secrets.host,

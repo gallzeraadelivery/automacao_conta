@@ -1,20 +1,13 @@
-import { db, auditLogs } from "@uber-automation/database";
+import type { AuditLogEntry } from "@uber-automation/security";
+import { auditLogger } from "../lib/auditLogger";
 
-export interface AuditLogInput {
-  companyId: string;
-  operatorId?: string;
-  applicantId?: string;
-  action: string;
-  // Nunca incluir senhas, tokens ou codigos de verificacao aqui.
-  metadata?: Record<string, unknown>;
-}
+export type AuditLogInput = AuditLogEntry;
 
+/**
+ * Fina camada de compatibilidade sobre o AuditLogger compartilhado - mantém
+ * a assinatura já usada em todas as rotas. `metadata` é mascarado
+ * automaticamente pelo AuditLogger antes de ser persistido.
+ */
 export async function logAudit(input: AuditLogInput): Promise<void> {
-  await db.insert(auditLogs).values({
-    companyId: input.companyId,
-    operatorId: input.operatorId,
-    applicantId: input.applicantId,
-    action: input.action,
-    metadataSanitized: input.metadata ?? null,
-  });
+  await auditLogger.log(input);
 }
