@@ -1,0 +1,89 @@
+import { Router } from "express";
+import { z } from "zod";
+import { authenticate, requireRole } from "../middleware/auth";
+import { uploadSpreadsheet } from "../middleware/upload";
+import { HttpError } from "../middleware/errorHandler";
+import { parseSpreadsheetBuffer } from "../lib/parseSpreadsheet";
+import {
+  validateApplicantImport,
+  importApplicants,
+  listApplicants,
+  getApplicantById,
+} from "../services/applicants.service";
+import { logAudit } from "../services/auditLog.service";
+
+export const applicantsRouter = Router();
+
+applicantsRouter.use(authenticate);
+
+applicantsRouter.post(
+  "/validate-import",
+  requireRole("admin", "operator"),
+  uploadSpreadsheet.single("file"),
+  async (req, res, next) => {
+    try {
+      if (!req.file) {
+        throw new HttpError(400, "MISSING_FILE", "Envie um arquivo no campo 'file'");
+      }
+      const rows = parseSpreadsheetBuffer(req.file.buffer, req.file.originalname);
+      const result = await validateApplicantImport(req.user!.companyId, rows);
+      return res.json({ success: true, data: result });
+    } catch (error) {
+      return next(error);
+    }
+  },
+);
+
+applicantsRouter.post(
+  "/import",
+  requireRole("admin", "operator"),
+  uploadSpreadsheet.single("file"),
+  async (req, res, next) => {
+    try {
+      if (!req.file) {
+        throw new HttpError(400, "MISSING_FILE", "Envie um arquivo no campo 'file'");
+      }
+      const rows = parseSpreadsheetBuffer(req.file.buffer, req.file.originalname);
+      const result = await importApplicants(req.user!.companyId, rows);
+
+      await logAudit({
+        companyId: req.user!.companyId,
+        operatorId: req.user!.operatorId,
+        action: "import_applicants",
+        metadata: { imported: result.imported, skipped: result.skipped },
+      });
+
+      return res.json({ success: true, data: result });
+    } catch (error) {
+      return next(error);
+    }
+  },
+);
+
+const listQuerySchema = z.object({
+  page: z.coerce.number().int().min(1).default(1),
+  pageSize: z.coerce.number().int().min(1).max(100).default(20),
+  status: z.string().optional(),
+});
+
+applicantsRouter.get("/", async (req, res, next) => {
+  try {
+    const query = listQuerySchema.parse(req.query);
+    const result = await listApplicants(req.user!.companyId, query);
+    return res.json({ success: true, data: result });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+applicantsRouter.get("/:id", async (req, res, next) => {
+  try {
+    const applicant = await getApplicantById(req.user!.companyId, req.params.id);
+    if (!applicant) {
+      throw new HttpError(404, "NOT_FOUND", "Motorista não encontrado");
+    }
+    return res.json({ success: true, data: applicant });
+  } catch (error) {
+    return next(error);
+  }
+});

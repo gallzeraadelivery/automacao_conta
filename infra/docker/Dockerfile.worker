@@ -1,0 +1,15 @@
+FROM node:22-slim
+
+RUN corepack enable
+
+WORKDIR /app
+
+COPY pnpm-workspace.yaml package.json pnpm-lock.yaml tsconfig.json ./
+COPY packages ./packages
+COPY apps/worker ./apps/worker
+
+RUN pnpm install --frozen-lockfile
+
+WORKDIR /app
+
+CMD ["pnpm", "--filter", "@uber-automation/worker", "dev"]

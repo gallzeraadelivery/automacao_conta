@@ -1,0 +1,37 @@
+node_modules/
+dist/
+build/
+.next/
+out/
+coverage/
+
+# env
+.env
+.env.local
+.env.*.local
+
+# logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# editor
+.vscode/*
+!.vscode/extensions.json
+.idea/
+
+# os
+.DS_Store
+Thumbs.db
+
+# playwright / browser profiles (sensitive, never commit)
+**/browser-profiles/
+**/.auth/
+playwright-report/
+test-results/
+
+# drizzle
+packages/database/drizzle/meta/
+
+# misc
+*.tsbuildinfo
