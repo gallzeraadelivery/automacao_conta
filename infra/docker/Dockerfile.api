@@ -29,6 +29,11 @@ ENV NODE_ENV=production
 RUN groupadd --system --gid 1001 nodeapp \
   && useradd --system --uid 1001 --gid nodeapp --home-dir /app apiuser
 COPY --from=deps --chown=apiuser:nodeapp /app ./
+# COPY --chown só ajusta a dona do conteúdo copiado, não do diretório /app em
+# si (criado como root pelo WORKDIR na stage `base`) - sem isso, `pnpm start`
+# rodando como `apiuser` falha ao tentar criar /app/.cache/node/corepack
+# (EACCES: permission denied). Mesmo ajuste já usado em Dockerfile.worker.
+RUN chown apiuser:nodeapp /app
 USER apiuser
 
 EXPOSE 4000
