@@ -1,0 +1,667 @@
+openapi: 3.0.3
+info:
+  title: uber-automation API
+  version: "1.0.0"
+  description: |
+    API do painel administrativo de cadastro assistido de motoristas
+    parceiros. Sistema estritamente administrativo: nunca envia
+    documentos/selfies, nunca resolve CAPTCHA/2FA, nunca conclui
+    verificação de identidade - toda etapa sensível pausa e aparece na
+    Central de Pendências para um operador humano decidir o que fazer.
+
+    Toda resposta segue o formato `{ success: true, data }` ou
+    `{ success: false, error: { code, message, details? } }`.
+servers:
+  - url: http://localhost:4000
+    description: Desenvolvimento local
+tags:
+  - name: auth
+    description: Login, refresh e logout de operadores
+  - name: applicants
+    description: Importação e listagem de motoristas
+  - name: email-accounts
+    description: Importação e listagem de contas de e-mail dos motoristas
+  - name: proxies
+    description: Cadastro e teste de proxies
+  - name: dashboard
+    description: Estatísticas gerais
+  - name: pending-actions
+    description: Central de Pendências (Fase 6) - motoristas aguardando ação humana
+  - name: deliveries
+    description: Rota pública de entrega de link seguro ao motorista (Fase 6)
+  - name: reports
+    description: Relatórios de automação e auditoria, com exportação CSV/PDF (Fase 6)
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    ApiError:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: false
+        error:
+          type: object
+          properties:
+            code:
+              type: string
+              example: VALIDATION_ERROR
+            message:
+              type: string
+            details:
+              nullable: true
+
+    Operator:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        email:
+          type: string
+          format: email
+        role:
+          type: string
+          enum: [admin, operator, viewer]
+        companyId:
+          type: string
+          format: uuid
+
+    Applicant:
+      type: object
+      description: Linha da tabela applicants - fonte da verdade tanto para a listagem de motoristas quanto para a Central de Pendências.
+      properties:
+        id: { type: string, format: uuid }
+        companyId: { type: string, format: uuid }
+        externalId: { type: string }
+        fullName: { type: string }
+        email: { type: string, format: email }
+        phone: { type: string, nullable: true }
+        city: { type: string, nullable: true }
+        state: { type: string, nullable: true }
+        postalCode: { type: string, nullable: true }
+        vehicleType: { type: string, nullable: true }
+        status:
+          type: string
+          enum:
+            [
+              NEW,
+              CONSENT_PENDING,
+              READY_TO_START,
+              IN_PROGRESS,
+              AWAITING_HUMAN_ACTION,
+              RESOLVED,
+              CANCELLED,
+              COMPLETED,
+              FAILED,
+            ]
+        currentStep: { type: string, nullable: true }
+        pauseReason:
+          type: string
+          nullable: true
+          enum:
+            [
+              IDENTITY_VERIFICATION_REQUIRED,
+              NON_SOCURE_PROVIDER,
+              CAPTCHA,
+              TWO_FACTOR,
+              SECURITY_BLOCK,
+            ]
+        profilePhotoProvider: { type: string, nullable: true }
+        profilePhotoConfidence: { type: string, nullable: true }
+        driverLicenseProvider: { type: string, nullable: true }
+        driverLicenseConfidence: { type: string, nullable: true }
+        pausedAt: { type: string, format: date-time, nullable: true }
+        assignedOperatorId: { type: string, format: uuid, nullable: true }
+        resolvedAt: { type: string, format: date-time, nullable: true }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+    PendingActionView:
+      type: object
+      description: Mesma linha de `applicants`, projetada para a Central de Pendências (só motoristas com status AWAITING_HUMAN_ACTION).
+      properties:
+        id: { type: string, format: uuid }
+        applicantId: { type: string, format: uuid }
+        applicantName: { type: string }
+        email: { type: string }
+        phone: { type: string, nullable: true }
+        city: { type: string, nullable: true }
+        vehicleType: { type: string, nullable: true }
+        status: { type: string }
+        currentStep: { type: string, nullable: true }
+        pauseReason: { type: string, nullable: true }
+        profilePhotoProvider: { type: string, nullable: true }
+        profilePhotoConfidence: { type: string, nullable: true }
+        driverLicenseProvider: { type: string, nullable: true }
+        driverLicenseConfidence: { type: string, nullable: true }
+        pausedAt: { type: string, format: date-time, nullable: true }
+        assignedOperatorId: { type: string, format: uuid, nullable: true }
+        assignedOperatorName: { type: string, nullable: true }
+        resolvedAt: { type: string, format: date-time, nullable: true }
+
+    AutomationReport:
+      type: object
+      properties:
+        period:
+          type: object
+          properties:
+            from: { type: string, format: date-time }
+            to: { type: string, format: date-time }
+        totalProcessed: { type: integer }
+        successfulCount: { type: integer }
+        failedCount: { type: integer }
+        pausedCount: { type: integer }
+        successRate: { type: number, format: float, description: "0 a 1" }
+        averageTimeToCompleteSeconds: { type: integer }
+        providerDistribution:
+          type: object
+          properties:
+            socure: { type: integer }
+            other: { type: integer }
+            unknown: { type: integer }
+        errorDistribution:
+          type: object
+          additionalProperties: { type: integer }
+        topErrors:
+          type: array
+          items:
+            type: object
+            properties:
+              code: { type: string }
+              count: { type: integer }
+              message: { type: string }
+
+    AuditReport:
+      type: object
+      properties:
+        period:
+          type: object
+          properties:
+            from: { type: string, format: date-time }
+            to: { type: string, format: date-time }
+        totalActions: { type: integer }
+        actionsByType:
+          type: object
+          additionalProperties: { type: integer }
+        actionsByOperator:
+          type: array
+          items:
+            type: object
+            properties:
+              operator: { type: string }
+              count: { type: integer }
+        securityEvents:
+          type: array
+          items:
+            type: object
+            properties:
+              timestamp: { type: string, format: date-time }
+              event: { type: string }
+              severity: { type: string, enum: [LOW, MEDIUM, HIGH] }
+
+  responses:
+    Unauthorized:
+      description: Sem token, token inválido/expirado
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ApiError" }
+    Forbidden:
+      description: Autenticado, mas sem permissão (role insuficiente)
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ApiError" }
+    NotFound:
+      description: Recurso não encontrado (ou pertence a outra empresa)
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ApiError" }
+    ValidationError:
+      description: Payload/query inválidos - detectado antes de tocar o banco
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ApiError" }
+
+security:
+  - bearerAuth: []
+
+paths:
+  /health:
+    get:
+      summary: Health check (sem autenticação)
+      security: []
+      responses:
+        "200": { description: OK }
+
+  /api/auth/login:
+    post:
+      tags: [auth]
+      summary: Login de operador (rate limited)
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string, format: password }
+      responses:
+        "200":
+          description: Login bem-sucedido
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  data:
+                    type: object
+                    properties:
+                      accessToken: { type: string }
+                      operator: { $ref: "#/components/schemas/Operator" }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { description: Credenciais inválidas }
+        "429": { description: Muitas tentativas (rate limit) }
+
+  /api/auth/refresh:
+    post:
+      tags: [auth]
+      summary: Renova o access token a partir do cookie httpOnly de refresh
+      security: []
+      responses:
+        "200": { description: Novo access token }
+        "401": { description: Sessão inválida/expirada }
+
+  /api/auth/logout:
+    post:
+      tags: [auth]
+      summary: Encerra a sessão (limpa o cookie de refresh)
+      responses:
+        "200": { description: OK }
+
+  /api/applicants/validate-import:
+    post:
+      tags: [applicants]
+      summary: Valida um arquivo CSV/XLSX de motoristas sem importar
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file: { type: string, format: binary }
+      responses:
+        "200": { description: Resultado da validação (linhas válidas/inválidas) }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/applicants/import:
+    post:
+      tags: [applicants]
+      summary: Importa motoristas de um arquivo CSV/XLSX (revalida no servidor)
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file: { type: string, format: binary }
+      responses:
+        "200": { description: "{ imported, skipped, invalidRows }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/applicants:
+    get:
+      tags: [applicants]
+      summary: Lista motoristas da empresa (paginado)
+      parameters:
+        - { name: page, in: query, schema: { type: integer, default: 1 } }
+        - { name: pageSize, in: query, schema: { type: integer, default: 20 } }
+        - { name: status, in: query, schema: { type: string } }
+      responses:
+        "200":
+          description: Lista paginada
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  data:
+                    type: object
+                    properties:
+                      items:
+                        type: array
+                        items: { $ref: "#/components/schemas/Applicant" }
+                      page: { type: integer }
+                      pageSize: { type: integer }
+                      total: { type: integer }
+                      totalPages: { type: integer }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/applicants/{id}:
+    get:
+      tags: [applicants]
+      summary: Detalhe de um motorista
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: Motorista
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  data: { $ref: "#/components/schemas/Applicant" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/email-accounts/validate-import:
+    post:
+      tags: [email-accounts]
+      summary: Valida um arquivo CSV/XLSX de contas de e-mail sem importar
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema: { type: object, properties: { file: { type: string, format: binary } } }
+      responses:
+        "200": { description: Resultado da validação }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/email-accounts/import:
+    post:
+      tags: [email-accounts]
+      summary: Importa contas de e-mail (senha criptografada via CredentialVault antes de persistir)
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema: { type: object, properties: { file: { type: string, format: binary } } }
+      responses:
+        "200": { description: "{ imported, skipped, invalidRows }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/email-accounts:
+    get:
+      tags: [email-accounts]
+      summary: Lista contas de e-mail da empresa (nunca retorna a senha)
+      responses:
+        "200": { description: Lista }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/proxies:
+    post:
+      tags: [proxies]
+      summary: Cadastra um proxy (host/senha criptografados antes de persistir)
+      responses:
+        "200": { description: Proxy criado (view pública, sem credenciais) }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    get:
+      tags: [proxies]
+      summary: Lista proxies da empresa (nunca retorna host/usuário/senha em texto puro)
+      responses:
+        "200": { description: Lista }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/proxies/{id}/test:
+    post:
+      tags: [proxies]
+      summary: Testa conectividade de um proxy e atualiza status/latência
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: Resultado do teste }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /api/dashboard/stats:
+    get:
+      tags: [dashboard]
+      summary: Estatísticas gerais (totais + distribuição de status)
+      responses:
+        "200": { description: Estatísticas }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/pending-actions:
+    get:
+      tags: [pending-actions]
+      summary: Lista a Central de Pendências (motoristas com status AWAITING_HUMAN_ACTION)
+      parameters:
+        - { name: assignedTo, in: query, schema: { type: string, format: uuid } }
+        - {
+            name: sortBy,
+            in: query,
+            schema: { type: string, enum: [pausedAt, createdAt], default: pausedAt },
+          }
+      responses:
+        "200":
+          description: Lista
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  data:
+                    type: object
+                    properties:
+                      items:
+                        type: array
+                        items: { $ref: "#/components/schemas/PendingActionView" }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/pending-actions/{id}:
+    get:
+      tags: [pending-actions]
+      summary: Detalhe de uma pendência
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: Pendência
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  data: { $ref: "#/components/schemas/PendingActionView" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      tags: [pending-actions]
+      summary: Resolve, cancela, ou assume (revisão manual) uma pendência
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [action]
+              properties:
+                action: { type: string, enum: [RESOLVED, CANCELLED, MANUAL_REVIEW] }
+      responses:
+        "200":
+          description: Pendência atualizada
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  data: { $ref: "#/components/schemas/PendingActionView" }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/pending-actions/{id}/audit-logs:
+    get:
+      tags: [pending-actions]
+      summary: Logs de auditoria relacionados a este motorista
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: Lista de logs (mais recentes primeiro) }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/pending-actions/{id}/screenshot:
+    get:
+      tags: [pending-actions]
+      summary: Screenshot sanitizada da etapa (ainda não implementado - ver README)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "404":
+          description: "Sempre 404 nesta versão: não há pipeline de captura/armazenamento de screenshot ainda (ver README, Limitações conhecidas)."
+
+  /api/pending-actions/{id}/deliver:
+    post:
+      tags: [pending-actions]
+      summary: Gera um link seguro e temporário para o motorista concluir a etapa pessoalmente
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                expiresIn:
+                  type: integer
+                  description: Segundos até a expiração (60 a 604800). Padrão 3600.
+                  default: 3600
+      responses:
+        "200":
+          description: Link gerado
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  data:
+                    type: object
+                    properties:
+                      deliveryLink: { type: string, format: uri }
+                      expiresAt: { type: string, format: date-time }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/deliveries/{token}:
+    get:
+      tags: [deliveries]
+      summary: Resolve um link de entrega (rota pública, sem autenticação de operador)
+      security: []
+      parameters:
+        - { name: token, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Status do link (nunca expõe mais que o primeiro nome do motorista)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  data:
+                    type: object
+                    properties:
+                      applicantFirstName: { type: string, nullable: true }
+                      status: { type: string, enum: [VALID, EXPIRED, REVOKED, NOT_FOUND] }
+                      expiresAt: { type: string, format: date-time, nullable: true }
+
+  /api/reports/automation:
+    get:
+      tags: [reports]
+      summary: Relatório de automação (taxa de sucesso, provedores, erros) em JSON
+      parameters:
+        - { name: from, in: query, schema: { type: string, format: date } }
+        - { name: to, in: query, schema: { type: string, format: date } }
+      responses:
+        "200":
+          description: Relatório
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  data: { $ref: "#/components/schemas/AutomationReport" }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/reports/automation/export:
+    get:
+      tags: [reports]
+      summary: Exporta o relatório de automação em CSV ou PDF
+      parameters:
+        - { name: from, in: query, schema: { type: string, format: date } }
+        - { name: to, in: query, schema: { type: string, format: date } }
+        - { name: format, in: query, schema: { type: string, enum: [csv, pdf], default: csv } }
+      responses:
+        "200":
+          description: Arquivo CSV ou PDF
+          content:
+            text/csv: { schema: { type: string, format: binary } }
+            application/pdf: { schema: { type: string, format: binary } }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/reports/audit:
+    get:
+      tags: [reports]
+      summary: Relatório de auditoria (ações por tipo/operador, eventos de segurança) em JSON
+      parameters:
+        - { name: from, in: query, schema: { type: string, format: date } }
+        - { name: to, in: query, schema: { type: string, format: date } }
+      responses:
+        "200":
+          description: Relatório
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  data: { $ref: "#/components/schemas/AuditReport" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/reports/audit/export:
+    get:
+      tags: [reports]
+      summary: Exporta o relatório de auditoria em CSV ou PDF
+      parameters:
+        - { name: from, in: query, schema: { type: string, format: date } }
+        - { name: to, in: query, schema: { type: string, format: date } }
+        - { name: format, in: query, schema: { type: string, enum: [csv, pdf], default: csv } }
+      responses:
+        "200":
+          description: Arquivo CSV ou PDF
+          content:
+            text/csv: { schema: { type: string, format: binary } }
+            application/pdf: { schema: { type: string, format: binary } }
+        "401": { $ref: "#/components/responses/Unauthorized" }

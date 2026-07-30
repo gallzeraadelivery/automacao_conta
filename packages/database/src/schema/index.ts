@@ -5,3 +5,4 @@ export * from "./emailAccounts";
 export * from "./proxyConfigs";
 export * from "./browserProfiles";
 export * from "./auditLogs";
+export * from "./driverDeliveries";

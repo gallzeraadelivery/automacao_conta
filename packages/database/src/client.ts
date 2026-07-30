@@ -12,6 +12,15 @@ function getDb(): NodePgDatabase<typeof schema> {
       throw new Error("DATABASE_URL is not set");
     }
     pool = new Pool({ connectionString });
+    // node-postgres emite 'error' no Pool quando um cliente ocioso perde a
+    // conexao (ex: Postgres reiniciou) - sem um listener, isso e um evento
+    // 'error' sem handler, que o Node trata como excecao nao capturada e
+    // derruba o processo inteiro. Uma query em andamento ja rejeita sua
+    // propria Promise (tratada normalmente pelo chamador) - isto e so para
+    // erros de conexao ociosa em segundo plano, que nao tem chamador algum.
+    pool.on("error", (error) => {
+      console.error("Erro inesperado no pool de conexoes do Postgres:", error);
+    });
     instance = drizzle(pool, { schema });
   }
   return instance;

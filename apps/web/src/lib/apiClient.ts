@@ -77,3 +77,28 @@ export async function apiRequest<T>(
 
   return result;
 }
+
+/**
+ * Baixa um arquivo autenticado (ex: exportação de relatório em CSV/PDF) -
+ * um `<a href>` simples não consegue enviar o header Authorization, então
+ * isto busca via fetch e aciona o download no navegador com um link
+ * temporário. Retorna `false` se a resposta não for OK (ex: sessão expirada).
+ */
+export async function apiDownload(path: string, filename: string): Promise<boolean> {
+  const headers = new Headers();
+  if (accessToken) headers.set("Authorization", `Bearer ${accessToken}`);
+
+  const response = await fetch(`${API_URL}${path}`, { headers, credentials: "include" });
+  if (!response.ok) return false;
+
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+  return true;
+}

@@ -1,16 +1,39 @@
-FROM node:22-slim
-
+# syntax=docker/dockerfile:1
+#
+# Build de produção da API (apps/api). Roda via `tsx` (não `node dist/*.js`)
+# de propósito: os pacotes do workspace exportam `main` apontando para o
+# TypeScript fonte (`./src/index.ts`), e os imports relativos do projeto não
+# têm extensão `.js` explícita - `tsc` sozinho gera um `dist/` que o Node não
+# consegue executar (`ERR_MODULE_NOT_FOUND`), verificado manualmente nesta
+# fase. Corrigir isso de vez (migrar todo o monorepo para `NodeNext` +
+# extensões explícitas, ou adotar um bundler) é indicado como próximo passo -
+# fora do escopo desta fase por exigir tocar em praticamente todo pacote do
+# monorepo sem um ambiente com Docker disponível para validar a mudança
+# ponta a ponta. `tsx` (esbuild por baixo) resolve os mesmos módulos que o
+# `tsx watch` já usado em desenvolvimento, só que rodando uma única vez, sem
+# watch/hot-reload.
+FROM node:22-slim AS base
 RUN corepack enable
-
 WORKDIR /app
 
+FROM base AS deps
 COPY pnpm-workspace.yaml package.json pnpm-lock.yaml tsconfig.json ./
 COPY packages ./packages
 COPY apps/api ./apps/api
+# --prod: descarta devDependencies (typescript, vitest, eslint-related,
+# supertest, @types/*) - nenhuma delas é necessária para rodar a API.
+RUN pnpm install --frozen-lockfile --prod
 
-RUN pnpm install --frozen-lockfile
+FROM base AS runtime
+ENV NODE_ENV=production
+RUN groupadd --system --gid 1001 nodeapp \
+  && useradd --system --uid 1001 --gid nodeapp --home-dir /app apiuser
+COPY --from=deps --chown=apiuser:nodeapp /app ./
+USER apiuser
 
-WORKDIR /app
 EXPOSE 4000
 
-CMD ["pnpm", "--filter", "@uber-automation/api", "dev"]
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+  CMD node -e "fetch('http://127.0.0.1:4000/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
+
+CMD ["pnpm", "--filter", "@uber-automation/api", "start"]

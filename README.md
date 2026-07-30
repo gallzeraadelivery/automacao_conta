@@ -93,6 +93,31 @@ escolhido pela plataforma, ou cancele/recrie cadastros automaticamente.
   [`packages/platform-adapters/README.md`](./packages/platform-adapters/README.md)
   e o [relatório de testes](./packages/platform-adapters/TEST_REPORT.md).
 
+## Fase 6 — o que já existe
+
+- **Central de Pendências** (`/dashboard/pending-actions`): tela onde operadores veem
+  motoristas com `status = AWAITING_HUMAN_ACTION` (não é uma tabela nova - é uma visão
+  sobre `applicants`, a mesma fonte da verdade já atualizada pelo worker desde a Fase 2)
+  com motivo da pausa, provedor/confiança detectados (Fase 4), operador responsável e
+  ações: **resolver**, **cancelar**, **assumir para revisão** e **entregar ao
+  motorista** (gera um link seguro de curta duração - nunca uma sessão de automação ao
+  vivo, ver [SECURITY.md](./SECURITY.md)). Endpoints em `apps/api/src/routes/pendingActions.routes.ts`
+  e `deliveries.routes.ts` (a rota pública que o motorista acessa).
+- **Dashboards e relatórios**: dashboard principal ampliado com taxa de sucesso e
+  gráfico de status; `Relatório de Automação` (taxa de sucesso, tempo médio,
+  distribuição de provedor, principais erros técnicos) e `Relatório de Auditoria`
+  (ações por tipo/operador, eventos de segurança), ambos com gráficos (`recharts`) e
+  exportação em **CSV e PDF** (`apps/api/src/routes/reports.routes.ts`).
+- **Documentação da API**: OpenAPI 3.0 completo (`apps/api/openapi.yaml`), servido via
+  Swagger UI em `/api/docs` (spec bruta em `/api/openapi.json`).
+- **Docker de produção**: Dockerfiles multi-stage (usuário não-root, healthcheck,
+  `next build --output=standalone` para o painel, Chromium real no worker); ver
+  [INSTALLATION.md](./INSTALLATION.md). `apps/mock-server` (Fase 3) só sobe com
+  `docker compose --profile dev up` - nunca em um `docker compose up` simples.
+- **[SECURITY.md](./SECURITY.md)**: checklist de segurança e modelo de ameaça dos
+  links de entrega ao motorista. **[INSTALLATION.md](./INSTALLATION.md)**: guia de
+  instalação (Docker e local).
+
 ## Estrutura
 
 ```
@@ -112,7 +137,9 @@ uber-automation/
 │   ├── email-service/              # EmailVerificationWorker (Gmail via Playwright)
 │   ├── verification-detector/       # VerificationFlowDetector (deteção informativa de provedor)
 │   └── platform-adapters/            # UberDriverApplicationAdapter (login, formulário, e-mail, pausa em etapa sensível)
-└── infra/docker/    # Dockerfiles e docker-compose.yml
+├── infra/docker/    # Dockerfiles (produção, multi-stage) e docker-compose.yml
+├── SECURITY.md       # Checklist de segurança e modelo de ameaça (Fase 6)
+└── INSTALLATION.md    # Guia de instalação - Docker e local (Fase 6)
 ```
 
 ## Pré-requisitos
@@ -181,7 +208,7 @@ uber-automation/
 pnpm test
 ```
 
-150 testes, nenhum exige Postgres/Redis reais (usam fakes/mocks injetados via DI - ver
+180 testes, nenhum exige Postgres/Redis reais (usam fakes/mocks injetados via DI - ver
 `packages/*/src/**/*.test.ts` e `apps/*/src/**/*.test.ts`). Cobrem:
 
 - Validações de importação (`packages/shared`): email inválido, duplicidade no arquivo,
@@ -220,6 +247,14 @@ pnpm test
   completo, conclusão (`SUCCESS`) quando nenhuma etapa sensível é encontrada, e
   tratamento de erro (não uma exceção crua) quando a credencial de login está
   corrompida.
+- **Central de Pendências e relatórios (Fase 6)** (`apps/api`): parsing real de
+  arquivos CSV/XLSX (`parseSpreadsheet.test.ts` - inclui um bug de codificação
+  UTF-8 encontrado e corrigido nesta fase, que corrompia nomes acentuados como
+  "João"), geração de CSV/PDF (`csv.test.ts`, `pdf.test.ts`), hash do token de
+  entrega ao motorista nunca reversível/nunca reutilizável
+  (`pendingActions.hashToken.test.ts`), autenticação obrigatória e validação de
+  entrada acontecendo antes de qualquer consulta ao banco em todas as rotas novas
+  (`pendingActions.test.ts`, `reports.test.ts`).
 
 Validações que dependem do banco (duplicidade já existente na empresa, proxy
 inexistente, e-mail já associado a outro motorista) são testadas na camada de serviço da
@@ -397,17 +432,59 @@ de chave).
   (retentável) e `NonRetryableAutomationError`/`SecurityChallengeError` (nunca
   retentado - o job é descartado via `job.discard()` e o motorista passa para
   `AWAITING_HUMAN_ACTION`, que já aparece no dashboard/listagem existentes).
+- **Central de Pendências (Fase 6)**: não é uma tabela nova - é uma visão sobre
+  `applicants` filtrada por `status = 'AWAITING_HUMAN_ACTION'` (evita duplicar
+  estado; o status já é a fonte da verdade). Novas colunas (`pause_reason`,
+  `paused_at`, `*_confidence`) só armazenam categorias/timestamps, nunca dado
+  sensível - o detalhe legível continua no log de auditoria correspondente.
+- **Link de entrega ao motorista (Fase 6)**: token de 256 bits
+  (`crypto.randomBytes(32)`), só o hash SHA-256 vai para o banco
+  (`driver_deliveries.token_hash`), expiração obrigatória, e a página pública
+  que o motorista acessa nunca entrega uma sessão de automação ao vivo -
+  apenas instruções para ele concluir a etapa pessoalmente na plataforma real.
+  Ver [SECURITY.md](./SECURITY.md) para o modelo de ameaça completo.
+- **`pg.Pool` sem listener de `error`** (`packages/database/src/client.ts`) era uma
+  lacuna real de robustez encontrada nesta fase: sem ele, uma falha de conexão
+  ociosa em segundo plano (evento `error` do Node sem handler) derrubava o
+  processo inteiro. Corrigido com um listener que apenas loga o erro.
+- **`node dist/index.js` nunca funcionou** para `apps/api`/`apps/worker`/
+  `apps/mock-server` (verificado manualmente nesta fase - `ERR_MODULE_NOT_FOUND`,
+  porque os pacotes do workspace exportam `main` apontando para TypeScript fonte
+  e os imports relativos do projeto não têm extensão `.js`). Os scripts `start`
+  desses três apps foram corrigidos para rodar via `tsx` (mesmo motor de
+  desenvolvimento, sem watch/hot-reload) - ver comentário no topo de
+  `infra/docker/Dockerfile.api`/`Dockerfile.worker` para os detalhes e o que
+  seria necessário para compilar de verdade (`NodeNext` + extensões explícitas
+  em todo o monorepo, ou um bundler).
 
-## Próximos passos (Fase 6+)
+## Próximos passos
 
-Consulte as fases seguintes conforme forem detalhadas. Com o `UberDriverApplicationAdapter`
-(Fase 5) validado contra o `apps/mock-server`, a próxima fase deve conectá-lo à fila
-`automation-jobs` (`apps/worker`, hoje só executa o passo `AWAIT_EMAIL_CODE`): abrir um
-navegador real por `browserProfileId` (via `@uber-automation/automation`
-`BrowserProfileManager`, que já isola sessão/cookies por motorista), instanciar o
-adaptador com esse `Page`, e mapear `AutomationResult.pauseReason` diretamente para
-`NonRetryableAutomationError` (`apps/worker/src/errors.ts`) - os valores já foram
-desenhados para bater 1:1, sem tradução. Também vale considerar: retomar um job pausado
-depois que o motorista concluir a etapa sensível pessoalmente, e validar os seletores de
-`packages/platform-adapters/src/adapters/uber/selectors.ts` contra o site real da Uber
-(documentado como não validado neste ambiente).
+O sistema está funcional ponta a ponta (base, workers seguros, ambiente de testes,
+detecção de provedor, adaptador Uber, painel administrativo, deploy containerizado),
+mas os itens abaixo dependem de validação/decisão específica do seu ambiente antes de
+um primeiro uso real com motoristas de verdade:
+
+1. **Conectar `UberDriverApplicationAdapter` (Fase 5) à fila `automation-jobs`**
+   (`apps/worker`, hoje só executa o passo `AWAIT_EMAIL_CODE`): abrir um navegador
+   real por `browserProfileId` (via `BrowserProfileManager`, que já isola
+   sessão/cookies por motorista), instanciar o adaptador com esse `Page`, e mapear
+   `AutomationResult.pauseReason` diretamente para `NonRetryableAutomationError`
+   (`apps/worker/src/errors.ts`) - os valores já foram desenhados para bater 1:1,
+   sem tradução. Sem essa conexão, a Central de Pendências (Fase 6) só mostra
+   motoristas que chegaram a `AWAITING_HUMAN_ACTION` por outro caminho (ex: dados
+   de teste inseridos manualmente).
+2. **Validar os seletores reais** contra contas de teste descartáveis: Uber
+   (`packages/platform-adapters/src/adapters/uber/selectors.ts`) e Gmail
+   (`packages/email-service/src/playwrightGmailClient.ts`) - documentados como não
+   validados contra os sites reais neste ambiente de desenvolvimento.
+3. **Pipeline de screenshot sanitizada** para a Central de Pendências (endpoint já
+   existe, sempre 404 nesta versão - ver SECURITY.md) - depende do item 1 (só faz
+   sentido capturar uma screenshot durante uma automação de verdade).
+4. **Envio automático do link de entrega por e-mail/SMS** (hoje o operador copia e
+   envia manualmente - ver `DeliverToDriverModal.tsx`).
+5. **TLS/HTTPS e backup automático do banco em produção** - fora do escopo do
+   código da aplicação, depende da infraestrutura escolhida (ver checklist em
+   [SECURITY.md](./SECURITY.md)).
+6. **Migrar para módulos compilados de verdade** (`NodeNext` + extensões `.js`
+   explícitas, ou um bundler) se o custo de start-up do `tsx` em produção deixar
+   de ser aceitável em algum momento - ver nota acima sobre `node dist/index.js`.

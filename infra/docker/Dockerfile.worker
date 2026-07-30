@@ -1,15 +1,36 @@
-FROM node:22-slim
-
+# syntax=docker/dockerfile:1
+#
+# Build de produção do worker (apps/worker). Roda via `tsx` pelo mesmo
+# motivo documentado em Dockerfile.api (workspace packages exportam `main`
+# apontando para TypeScript fonte; `tsc` sozinho não produz um `dist/`
+# executável direto com `node`, verificado manualmente nesta fase).
+FROM node:22-slim AS base
 RUN corepack enable
-
 WORKDIR /app
 
+FROM base AS deps
 COPY pnpm-workspace.yaml package.json pnpm-lock.yaml tsconfig.json ./
 COPY packages ./packages
 COPY apps/worker ./apps/worker
+RUN pnpm install --frozen-lockfile --prod
 
-RUN pnpm install --frozen-lockfile
+FROM base AS runtime
+ENV NODE_ENV=production
+# packages/email-service (PlaywrightGmailClient) e packages/platform-adapters
+# (UberDriverApplicationAdapter) precisam de um Chromium real - instalado
+# aqui em vez de baixado sob demanda em runtime. Caminho próprio (não o
+# default em ~/.cache) porque o container roda como usuário não-root depois.
+ENV PLAYWRIGHT_BROWSERS_PATH=/app/.playwright-browsers
 
-WORKDIR /app
+COPY --from=deps /app ./
+# --with-deps instala também as bibliotecas de sistema do Chromium
+# (root necessário aqui - por isso roda antes de trocar para o usuário sem privilégios).
+RUN npx --yes playwright install --with-deps chromium
 
-CMD ["pnpm", "--filter", "@uber-automation/worker", "dev"]
+RUN groupadd --system --gid 1001 nodeworker \
+  && useradd --system --uid 1001 --gid nodeworker --home-dir /app workeruser \
+  && mkdir -p /app/storage/browser-profiles \
+  && chown -R workeruser:nodeworker /app
+USER workeruser
+
+CMD ["pnpm", "--filter", "@uber-automation/worker", "start"]

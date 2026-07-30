@@ -10,7 +10,12 @@ export function parseSpreadsheetBuffer(buffer: Buffer, originalName: string): un
   let workbook: XLSX.WorkBook;
 
   try {
-    workbook = XLSX.read(buffer, { type: "buffer" });
+    // codepage 65001 = UTF-8. Sem isso, CSVs em UTF-8 sem BOM (o caso comum
+    // ao exportar de planilhas com nomes acentuados, ex: "João") são lidos
+    // com a codificação errada e corrompem caracteres não-ASCII. Não afeta
+    // a leitura de arquivos XLSX reais (formato binário com codificação
+    // própria, independente desta opção).
+    workbook = XLSX.read(buffer, { type: "buffer", codepage: 65001 });
   } catch {
     throw new HttpError(400, "INVALID_FILE", `Não foi possível ler o arquivo "${originalName}"`);
   }

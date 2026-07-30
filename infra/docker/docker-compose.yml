@@ -41,6 +41,7 @@ services:
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER:-uber_automation}:${POSTGRES_PASSWORD:-change-me-strong-password}@postgres:5432/${POSTGRES_DB:-uber_automation}
       REDIS_URL: redis://redis:6379
+      WEB_PUBLIC_URL: ${WEB_PUBLIC_URL:-http://localhost:3000}
     ports:
       - "${API_PORT:-4000}:4000"
     depends_on:
@@ -48,6 +49,18 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:4000/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
 
   worker:
     build:
@@ -59,6 +72,12 @@ services:
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER:-uber_automation}:${POSTGRES_PASSWORD:-change-me-strong-password}@postgres:5432/${POSTGRES_DB:-uber_automation}
       REDIS_URL: redis://redis:6379
+      # Persiste cookies/sessão isolados por motorista entre restarts do
+      # container (ver volume browser_profiles_data abaixo e
+      # @uber-automation/automation BrowserProfileManager).
+      BROWSER_PROFILES_STORAGE_PATH: /app/storage/browser-profiles
+    volumes:
+      - browser_profiles_data:/app/storage/browser-profiles
     depends_on:
       postgres:
         condition: service_healthy
@@ -69,17 +88,26 @@ services:
     build:
       context: ../..
       dockerfile: infra/docker/Dockerfile.web
+      # NEXT_PUBLIC_API_URL precisa ser um build arg (não `environment:`
+      # abaixo) - o Next.js embute variáveis NEXT_PUBLIC_* no bundle do
+      # cliente em tempo de build (`next build`), não de execução. Mudar
+      # `.env` sem rebuildar a imagem não tem efeito nela - ver Dockerfile.web.
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:4000}
     restart: unless-stopped
     env_file:
       - ../../.env
-    environment:
-      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:4000}
     ports:
       - "${WEB_PORT:-3000}:3000"
     depends_on:
-      - api
+      api:
+        condition: service_healthy
 
+  # Simulador local do fluxo de cadastro da Uber (Fase 3) - nunca deve rodar
+  # em produção. Só sobe com `docker compose --profile dev up`, nunca com um
+  # `docker compose up` simples (sem --profile).
   mock-server:
+    profiles: ["dev"]
     build:
       context: ../..
       dockerfile: infra/docker/Dockerfile.mock-server
@@ -92,3 +120,4 @@ services:
 volumes:
   postgres_data:
   redis_data:
+  browser_profiles_data:

@@ -6,9 +6,12 @@ import { useAuth } from "@/lib/auth-context";
 
 const NAV_ITEMS = [
   { href: "/dashboard", label: "Dashboard" },
+  { href: "/dashboard/pending-actions", label: "Central de Pendências" },
   { href: "/dashboard/applicants", label: "Motoristas" },
   { href: "/dashboard/emails", label: "E-mails" },
   { href: "/dashboard/proxies", label: "Proxies" },
+  { href: "/dashboard/reports/automation", label: "Relatório de Automação" },
+  { href: "/dashboard/reports/audit", label: "Relatório de Auditoria" },
 ];
 
 export function Sidebar() {

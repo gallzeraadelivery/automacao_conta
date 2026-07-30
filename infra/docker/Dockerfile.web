@@ -1,16 +1,42 @@
-FROM node:22-slim
-
+# syntax=docker/dockerfile:1
+#
+# Build de produção do painel (apps/web, Next.js) usando `output: "standalone"`
+# (next.config.mjs) - o estágio final copia só o server bundle autocontido
+# (não o node_modules inteiro do monorepo), resultando numa imagem bem menor.
+#
+# IMPORTANTE: NEXT_PUBLIC_API_URL precisa ser um build ARG, não uma variável
+# de ambiente de runtime - o Next.js embute (inline) toda variável
+# NEXT_PUBLIC_* no bundle do cliente durante `next build`; defini-la só no
+# `docker run`/`docker compose up` (sem rebuildar a imagem) não tem efeito.
+FROM node:22-slim AS base
 RUN corepack enable
-
 WORKDIR /app
 
+FROM base AS deps
 COPY pnpm-workspace.yaml package.json pnpm-lock.yaml tsconfig.json ./
 COPY packages/shared ./packages/shared
 COPY apps/web ./apps/web
-
 RUN pnpm install --frozen-lockfile
 
-WORKDIR /app
+FROM deps AS build
+ARG NEXT_PUBLIC_API_URL=http://localhost:4000
+ENV NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
+RUN pnpm --filter @uber-automation/web build
+
+FROM base AS runtime
+ENV NODE_ENV=production
+ENV PORT=3000
+RUN groupadd --system --gid 1001 nodeweb \
+  && useradd --system --uid 1001 --gid nodeweb --home-dir /app webuser
+
+COPY --from=build --chown=webuser:nodeweb /app/apps/web/.next/standalone ./
+COPY --from=build --chown=webuser:nodeweb /app/apps/web/.next/static ./apps/web/.next/static
+COPY --from=build --chown=webuser:nodeweb /app/apps/web/public ./apps/web/public
+
+USER webuser
 EXPOSE 3000
 
-CMD ["pnpm", "--filter", "@uber-automation/web", "dev"]
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+  CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||3000)+'/login').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
+
+CMD ["node", "apps/web/server.js"]

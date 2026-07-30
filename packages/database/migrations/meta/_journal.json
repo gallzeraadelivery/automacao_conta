@@ -8,6 +8,13 @@
       "when": 1785344416820,
       "tag": "0000_known_mole_man",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1785422450279,
+      "tag": "0001_lowly_slapstick",
+      "breakpoints": true
     }
   ]
 }
