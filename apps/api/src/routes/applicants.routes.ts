@@ -11,6 +11,7 @@ import {
   getApplicantById,
   startAutomation,
 } from "../services/applicants.service";
+import { validateEmailListImport, importEmailList } from "../services/emailListImport.service";
 import { logAudit } from "../services/auditLog.service";
 
 export const applicantsRouter = Router();
@@ -51,6 +52,46 @@ applicantsRouter.post(
         companyId: req.user!.companyId,
         operatorId: req.user!.operatorId,
         action: "import_applicants",
+        metadata: { imported: result.imported, skipped: result.skipped },
+      });
+
+      return res.json({ success: true, data: result });
+    } catch (error) {
+      return next(error);
+    }
+  },
+);
+
+const emailListImportSchema = z.object({
+  text: z.string().min(1, "Cole ao menos uma linha no formato email|senha"),
+});
+
+applicantsRouter.post(
+  "/validate-email-list-import",
+  requireRole("admin", "operator"),
+  async (req, res, next) => {
+    try {
+      const { text } = emailListImportSchema.parse(req.body);
+      const result = await validateEmailListImport(req.user!.companyId, text);
+      return res.json({ success: true, data: result });
+    } catch (error) {
+      return next(error);
+    }
+  },
+);
+
+applicantsRouter.post(
+  "/email-list-import",
+  requireRole("admin", "operator"),
+  async (req, res, next) => {
+    try {
+      const { text } = emailListImportSchema.parse(req.body);
+      const result = await importEmailList(req.user!.companyId, text);
+
+      await logAudit({
+        companyId: req.user!.companyId,
+        operatorId: req.user!.operatorId,
+        action: "import_email_list",
         metadata: { imported: result.imported, skipped: result.skipped },
       });
 
