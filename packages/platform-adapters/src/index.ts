@@ -28,3 +28,9 @@ export {
   buildMockUberConfigFromBaseUrl,
   MOCK_UBER_SELECTORS,
 } from "./adapters/uber/mockUberConfig";
+
+export {
+  RealUberSignupAdapter,
+  type RealUberSignupAdapterOptions,
+} from "./adapters/uber-real/RealUberSignupAdapter";
+export { REAL_UBER_CONFIG, type RealUberConfig } from "./adapters/uber-real/realConfig";

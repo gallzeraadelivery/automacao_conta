@@ -4,14 +4,12 @@ import type { IEmailVerificationWorker } from "@uber-automation/email-service";
 import { BrowserProfileManager, type BrowserProfile } from "@uber-automation/automation";
 import {
   UberDriverApplicationAdapter,
-  UBER_CONFIG,
-  UBER_SELECTORS,
+  RealUberSignupAdapter,
   buildMockUberConfigFromBaseUrl,
   MOCK_UBER_SELECTORS,
-  type UberAdapterConfig,
-  type UberSelectors,
   type AutomationContext,
   type AutomationResult,
+  type IPlatformAdapter,
 } from "@uber-automation/platform-adapters";
 import { env } from "./env";
 import { resolveProxyConnection } from "./proxyConnection";
@@ -20,16 +18,6 @@ import type { AutomationJobLike } from "./processor";
 
 export interface UberAutomationRunnerOptions {
   auditLogger: AuditLogger;
-}
-
-function resolveTargetConfig(): { config: UberAdapterConfig; selectors: UberSelectors } {
-  if (env.AUTOMATION_TARGET === "production") {
-    return { config: UBER_CONFIG, selectors: UBER_SELECTORS };
-  }
-  return {
-    config: buildMockUberConfigFromBaseUrl(env.MOCK_UBER_BASE_URL),
-    selectors: MOCK_UBER_SELECTORS,
-  };
 }
 
 /**
@@ -66,10 +54,14 @@ async function hydrateProfile(
 /**
  * Fabrica o `AdministrativeFlowRunner` (ver processor.ts) usado em produção:
  * abre um Chromium real, isola a sessão por motorista (BrowserProfileManager,
- * Fase 3), aplica o proxy do motorista quando houver, e roda
- * `UberDriverApplicationAdapter` (Fase 5) até concluir ou pausar numa etapa
- * sensível. Alvo controlado por `AUTOMATION_TARGET` (padrão: mock-server,
- * nunca a Uber real) - ver env.ts.
+ * Fase 3), aplica o proxy do motorista quando houver, e roda o adaptador da
+ * Uber até concluir ou pausar numa etapa sensível. Alvo controlado por
+ * `AUTOMATION_TARGET` (env.ts):
+ * - "mock" (padrão): `UberDriverApplicationAdapter` contra apps/mock-server.
+ * - "production": `RealUberSignupAdapter` contra drivers.uber.com/
+ *   bonjour.uber.com de verdade (Fase 8) - `platformCredential` do job é
+ *   ignorado nesse modo (o adaptador gera a própria senha a partir do
+ *   sobrenome do motorista; não há login numa conta pré-existente).
  *
  * Limitação conhecida: cookies salvos do perfil são aplicados no início da
  * sessão, mas a sessão resultante (cookies/localStorage novos) ainda não é
@@ -109,7 +101,7 @@ export function createUberAutomationRunner(
       data.proxyId,
     );
     const proxyConnection = await resolveProxyConnection(data.proxyId).catch(() => null);
-    const { config, selectors } = resolveTargetConfig();
+    const isProduction = env.AUTOMATION_TARGET === "production";
 
     const browser = await chromium.launch({
       headless: true,
@@ -125,6 +117,11 @@ export function createUberAutomationRunner(
               password: proxyConnection.password,
             }
           : undefined,
+        // Fluxo real (Uber de produção) foi documentado em inglês - fixa o
+        // locale para reduzir o risco de a tela inicial vir em outro idioma
+        // dependendo de onde o proxy resolve (ver fillIdentifierStep, que já
+        // tem um fallback bilíngue para essa mesma tela por precaução extra).
+        locale: isProduction ? "en-US" : undefined,
       });
 
       if (profile.data.uber.cookies.length > 0) {
@@ -133,12 +130,17 @@ export function createUberAutomationRunner(
 
       const page = await context.newPage();
 
-      const adapter = new UberDriverApplicationAdapter(page, {
-        emailWorker: emailVerificationWorker,
-        auditLogger: options.auditLogger,
-        config,
-        selectors,
-      });
+      const adapter: IPlatformAdapter = isProduction
+        ? new RealUberSignupAdapter(page, {
+            emailWorker: emailVerificationWorker,
+            auditLogger: options.auditLogger,
+          })
+        : new UberDriverApplicationAdapter(page, {
+            emailWorker: emailVerificationWorker,
+            auditLogger: options.auditLogger,
+            config: buildMockUberConfigFromBaseUrl(env.MOCK_UBER_BASE_URL),
+            selectors: MOCK_UBER_SELECTORS,
+          });
 
       const automationContext: AutomationContext = {
         applicantId: data.applicantId,

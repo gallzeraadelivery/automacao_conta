@@ -1,0 +1,44 @@
+/**
+ * URLs e parâmetros do fluxo REAL de cadastro de motorista parceiro
+ * (drivers.uber.com -> bonjour.uber.com) - baseado em
+ * FLUXO_AUTOMACAO_UBER_COM_PRINTS.pdf (prints reais do fluxo, fornecido
+ * pelo usuário), não em suposição. Diferente de `../uber/config.ts`
+ * (site simulado, `apps/mock-server`), este arquivo é usado quando
+ * `AUTOMATION_TARGET=production` (apps/worker/src/env.ts).
+ *
+ * IMPORTANTE - fronteira honesta: os seletores em `realSelectors.ts` foram
+ * escritos a partir de screenshots (texto/rótulos visíveis), não do HTML
+ * real - nenhuma inspeção de DOM foi possível neste ambiente. Uma primeira
+ * execução real cuidadosamente observada é o que efetivamente valida (ou
+ * corrige) isso.
+ */
+export interface RealUberConfig {
+  /** Portal de cadastro (email/telefone/senha/nome/termos/gênero/localização/serviço). */
+  driversBaseUrl: string;
+  /** Portal de perfil/documentos, após o cadastro administrativo (Passo 12+ do PDF). */
+  profileUrl: string;
+  timeouts: {
+    pageLoad: number;
+    elementWait: number;
+    actionDelay: number;
+  };
+  /** Sufixo fixo da senha gerada - ver `buildPlaceholderPassword` em nameUtils.ts. */
+  passwordSuffix: string;
+  /** Opção do gênero (placeholder - corrigido pelo atendente na finalização, nunca dado real do motorista). */
+  genderOptionLabel: string;
+  /** Card do tipo de serviço a selecionar (fixo, ver PDF "Notas Importantes"). */
+  serviceTypeLabel: string;
+}
+
+export const REAL_UBER_CONFIG: RealUberConfig = {
+  driversBaseUrl: "https://drivers.uber.com",
+  profileUrl: "https://bonjour.uber.com/profile",
+  timeouts: {
+    pageLoad: 30000,
+    elementWait: 15000,
+    actionDelay: 500,
+  },
+  passwordSuffix: "@2026",
+  genderOptionLabel: "Man",
+  serviceTypeLabel: "Delivery with car",
+};
