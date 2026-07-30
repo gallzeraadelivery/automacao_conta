@@ -3,19 +3,25 @@ import type { UberSelectors } from "./selectors";
 
 /**
  * Config/seletores apontando para `apps/mock-server` (Fase 3) em vez do
- * site real da Uber - usados exclusivamente pelos testes de integração
- * deste pacote (`uberDriverApplicationAdapter.test.ts`) e pelo gerador de
- * relatório (`generate-report.mjs`).
- *
- * NÃO é exportado por `src/index.ts` - não faz parte da API pública do
- * pacote, só existe para validar `UberDriverApplicationAdapter` com um
- * navegador real contra HTML real, sem tocar a Uber de verdade. `baseUrl`
- * é montado em tempo de execução (a porta do mock-server é efêmera nos
- * testes), então esta função recebe a porta já escolhida.
+ * site real da Uber. Usados pelos testes de integração deste pacote
+ * (`uberDriverApplicationAdapter.test.ts`), pelo gerador de relatório
+ * (`generate-report.mjs`) e, a partir da Fase 7, por `apps/worker`
+ * (`AUTOMATION_TARGET=mock`, o padrão) para rodar a automação de ponta a
+ * ponta sem nunca tocar a Uber real - ver `buildMockUberConfigFromBaseUrl`.
  */
 export function buildMockUberConfig(port: number): UberAdapterConfig {
+  return buildMockUberConfigFromBaseUrl(`http://127.0.0.1:${port}/mock-uber`);
+}
+
+/**
+ * Mesma config de `buildMockUberConfig`, mas a partir de uma base URL já
+ * pronta (ex: `http://mock-server:3001/mock-uber` na rede Docker) em vez de
+ * assumir `127.0.0.1` - usado por `apps/worker` fora dos testes deste
+ * pacote, onde o mock-server roda num host/porta configurável.
+ */
+export function buildMockUberConfigFromBaseUrl(baseUrl: string): UberAdapterConfig {
   return {
-    baseUrl: `http://127.0.0.1:${port}/mock-uber`,
+    baseUrl,
     endpoints: {
       login: "/login",
       application: "/application",

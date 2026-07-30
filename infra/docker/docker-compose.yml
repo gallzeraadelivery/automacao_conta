@@ -76,6 +76,13 @@ services:
       # container (ver volume browser_profiles_data abaixo e
       # @uber-automation/automation BrowserProfileManager).
       BROWSER_PROFILES_STORAGE_PATH: /app/storage/browser-profiles
+      # AUTOMATION_TARGET=mock (padrão, ver .env.example) mira aqui, no
+      # serviço mock-server dentro da rede Docker - nunca na Uber real. O
+      # mock-server só sobe com `docker compose --profile dev up`; sem ele,
+      # jobs RUN_ADMINISTRATIVE_FLOW falham com erro técnico (retryable) até
+      # subir. Trocar AUTOMATION_TARGET para "production" também precisa
+      # trocar este valor (ou removê-lo) - ver SECURITY.md antes de fazer isso.
+      MOCK_UBER_BASE_URL: http://mock-server:3001/mock-uber
     volumes:
       - browser_profiles_data:/app/storage/browser-profiles
     depends_on:

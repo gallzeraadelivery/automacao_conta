@@ -16,6 +16,7 @@ const envSchema = z.object({
   // entrega ao motorista (Central de Pendências, Fase 6): `${WEB_PUBLIC_URL}/d/:token`.
   WEB_PUBLIC_URL: z.string().default("http://localhost:3000"),
   DATABASE_URL: z.string().min(1, "DATABASE_URL is required"),
+  REDIS_URL: z.string().default("redis://localhost:6379"),
   JWT_ACCESS_SECRET: z.string().min(16, "JWT_ACCESS_SECRET must be set and reasonably long"),
   JWT_REFRESH_SECRET: z.string().min(16, "JWT_REFRESH_SECRET must be set and reasonably long"),
   JWT_ACCESS_EXPIRES_IN: z.string().default("15m"),

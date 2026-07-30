@@ -24,3 +24,7 @@ export {
   type UberAdapterTimeouts,
 } from "./adapters/uber/config";
 export { UBER_SELECTORS, type UberSelectors, type FieldSelector } from "./adapters/uber/selectors";
+export {
+  buildMockUberConfigFromBaseUrl,
+  MOCK_UBER_SELECTORS,
+} from "./adapters/uber/mockUberConfig";

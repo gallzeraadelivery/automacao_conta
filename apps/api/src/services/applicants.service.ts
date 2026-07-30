@@ -1,10 +1,13 @@
 import { and, eq, inArray, or, sql } from "drizzle-orm";
-import { db, applicants, proxyConfigs } from "@uber-automation/database";
+import { db, applicants, proxyConfigs, emailAccounts } from "@uber-automation/database";
 import {
   validateApplicantImportRows,
   type ApplicantImportRow,
   type ImportRowError,
 } from "@uber-automation/shared";
+import { HttpError } from "../middleware/errorHandler";
+import { createCredentialVault } from "../lib/credentialVault";
+import { enqueueStartAutomationJob } from "../lib/automationQueue";
 
 export interface ApplicantPreviewRow {
   row: number;
@@ -199,6 +202,86 @@ export async function getApplicantById(companyId: string, id: string) {
     .limit(1);
 
   return applicant ?? null;
+}
+
+export interface StartAutomationInput {
+  proxyId: string;
+  platformPassword: string;
+}
+
+/**
+ * Enfileira a etapa RUN_ADMINISTRATIVE_FLOW (Fase 7) para este motorista:
+ * criptografa a senha de login da plataforma (nunca gravada em texto puro,
+ * nunca reexibida - mesmo padrão de email_accounts/proxy_configs) e coloca
+ * o job na fila `automation-jobs` para apps/worker processar. Por padrão
+ * (AUTOMATION_TARGET=mock no worker) o alvo é o servidor simulado, nunca a
+ * Uber real - ver apps/worker/src/env.ts e SECURITY.md.
+ */
+export async function startAutomation(
+  companyId: string,
+  applicantId: string,
+  input: StartAutomationInput,
+): Promise<{ jobId: string }> {
+  const applicant = await getApplicantById(companyId, applicantId);
+  if (!applicant) {
+    throw new HttpError(404, "NOT_FOUND", "Motorista não encontrado");
+  }
+
+  const [emailAccount] = await db
+    .select({ id: emailAccounts.id })
+    .from(emailAccounts)
+    .where(and(eq(emailAccounts.companyId, companyId), eq(emailAccounts.applicantId, applicantId)))
+    .limit(1);
+  if (!emailAccount) {
+    throw new HttpError(
+      400,
+      "EMAIL_ACCOUNT_REQUIRED",
+      "Cadastre o e-mail de verificação deste motorista antes de iniciar a automação",
+    );
+  }
+
+  const [proxy] = await db
+    .select({ id: proxyConfigs.id })
+    .from(proxyConfigs)
+    .where(and(eq(proxyConfigs.companyId, companyId), eq(proxyConfigs.id, input.proxyId)))
+    .limit(1);
+  if (!proxy) {
+    throw new HttpError(400, "PROXY_NOT_FOUND", "Proxy inexistente para esta empresa");
+  }
+
+  const vault = createCredentialVault(companyId);
+  const platformCredential = await vault.encrypt(
+    input.platformPassword,
+    { applicantId },
+    applicantId,
+  );
+
+  const jobId = await enqueueStartAutomationJob({
+    companyId,
+    applicantId,
+    emailAccountId: emailAccount.id,
+    proxyId: input.proxyId,
+    applicantData: {
+      fullName: applicant.fullName,
+      email: applicant.email,
+      phone: applicant.phone ?? "",
+      // O schema de applicants não guarda um endereço (rua/número) próprio,
+      // só cidade/UF/CEP - ver packages/database/src/schema/applicants.ts.
+      address: "",
+      city: applicant.city ?? "",
+      state: applicant.state ?? "",
+      postalCode: applicant.postalCode ?? "",
+      vehicleType: applicant.vehicleType ?? "",
+    },
+    platformCredential,
+  });
+
+  await db
+    .update(applicants)
+    .set({ status: "IN_PROGRESS", updatedAt: new Date() })
+    .where(eq(applicants.id, applicantId));
+
+  return { jobId };
 }
 
 export async function getApplicantStatusDistribution(companyId: string) {

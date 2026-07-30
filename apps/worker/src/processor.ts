@@ -37,13 +37,28 @@ export interface AutomationJobLike {
 
 export interface ApplicantStatusRepository {
   markAwaitingHumanAction(applicantId: string, reason: string): Promise<void>;
+  markInProgress?(applicantId: string, currentStep: string): Promise<void>;
+  markCompleted?(applicantId: string): Promise<void>;
 }
+
+/**
+ * Executa a etapa RUN_ADMINISTRATIVE_FLOW (Fase 7): abre um navegador real e
+ * roda UberDriverApplicationAdapter ate concluir ou pausar. Injetado como
+ * dependencia (em vez de importado direto) para o processor continuar
+ * testavel sem Playwright/Postgres reais - ver uberAutomationRunner.ts para
+ * a implementacao usada em produção.
+ */
+export type AdministrativeFlowRunner = (
+  job: AutomationJobLike,
+  emailVerificationWorker: IEmailVerificationWorker,
+) => Promise<void>;
 
 export interface ProcessAutomationJobDeps {
   limiter: ConcurrencyLimiter;
   auditLogger: AuditLogger;
   emailVerificationWorker?: IEmailVerificationWorker;
   applicantStatusRepository?: ApplicantStatusRepository;
+  runAdministrativeFlow?: AdministrativeFlowRunner;
   /** Atraso (ms) ao reagendar um job que esbarrou em limite de concorrência. */
   retryLaterDelayMs?: number;
 }
@@ -97,6 +112,10 @@ export async function processAutomationJob(
       metadata: { step: data.currentStep, attempt: job.attemptsMade + 1 },
     });
 
+    if (data.currentStep === AUTOMATION_STEPS.RUN_ADMINISTRATIVE_FLOW) {
+      await deps.applicantStatusRepository?.markInProgress?.(data.applicantId, data.currentStep);
+    }
+
     await executeStep(job, deps);
 
     await deps.auditLogger.log({
@@ -105,6 +124,10 @@ export async function processAutomationJob(
       action: "automation_job_attempt_succeeded",
       metadata: { step: data.currentStep },
     });
+
+    if (data.currentStep === AUTOMATION_STEPS.RUN_ADMINISTRATIVE_FLOW) {
+      await deps.applicantStatusRepository?.markCompleted?.(data.applicantId);
+    }
   } catch (error) {
     await handleJobError(job, error, deps);
     throw error;
@@ -136,12 +159,20 @@ async function executeStep(job: AutomationJobLike, deps: ProcessAutomationJobDep
     return;
   }
 
-  // Etapas de preenchimento do formulario Uber (packages/platform-adapters)
-  // chegam na Fase 3. Ate la, qualquer outra etapa e tratada como erro
-  // tecnico esperado (nao implementado), retryable ate ser substituida.
+  if (data.currentStep === AUTOMATION_STEPS.RUN_ADMINISTRATIVE_FLOW) {
+    if (!deps.runAdministrativeFlow || !deps.emailVerificationWorker) {
+      throw new TechnicalAutomationError(
+        "PAGE_UNAVAILABLE",
+        "runAdministrativeFlow/EmailVerificationWorker não configurados",
+      );
+    }
+    await deps.runAdministrativeFlow(job, deps.emailVerificationWorker);
+    return;
+  }
+
   throw new TechnicalAutomationError(
     "PAGE_UNAVAILABLE",
-    `Etapa "${data.currentStep}" ainda não implementada`,
+    `Etapa "${data.currentStep}" não implementada`,
   );
 }
 

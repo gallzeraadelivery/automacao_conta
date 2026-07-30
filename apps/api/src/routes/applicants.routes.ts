@@ -9,6 +9,7 @@ import {
   importApplicants,
   listApplicants,
   getApplicantById,
+  startAutomation,
 } from "../services/applicants.service";
 import { logAudit } from "../services/auditLog.service";
 
@@ -87,3 +88,34 @@ applicantsRouter.get("/:id", async (req, res, next) => {
     return next(error);
   }
 });
+
+const startAutomationSchema = z.object({
+  proxyId: z.string().uuid(),
+  platformPassword: z.string().min(1, "Informe a senha de login da plataforma"),
+});
+
+applicantsRouter.post(
+  "/:id/start-automation",
+  requireRole("admin", "operator"),
+  async (req, res, next) => {
+    try {
+      if (!req.params.id) {
+        throw new HttpError(400, "MISSING_ID", "ID do motorista ausente na URL");
+      }
+      const input = startAutomationSchema.parse(req.body);
+      const result = await startAutomation(req.user!.companyId, req.params.id, input);
+
+      await logAudit({
+        companyId: req.user!.companyId,
+        operatorId: req.user!.operatorId,
+        applicantId: req.params.id,
+        action: "automation_start_requested",
+        metadata: { jobId: result.jobId, proxyId: input.proxyId },
+      });
+
+      return res.status(202).json({ success: true, data: result });
+    } catch (error) {
+      return next(error);
+    }
+  },
+);
