@@ -42,4 +42,24 @@ export class DrizzleApplicantStatusRepository implements ApplicantStatusReposito
       .set({ status: "COMPLETED", updatedAt: new Date() })
       .where(eq(applicants.id, applicantId));
   }
+
+  /**
+   * Esgotou as tentativas por erro TÉCNICO (não uma pausa de regra - ver
+   * markAwaitingHumanAction) - ex: seletor não encontrado, timeout de rede.
+   * Sem isso o motorista ficaria "IN_PROGRESS" para sempre, sem aparecer em
+   * nenhum lugar visível para o operador revisar. Reaproveita a coluna
+   * pause_reason (varchar livre, sem enum no banco) para o motivo técnico -
+   * mesma ideia de "por que isto parou", categoria diferente de PAUSE_REASONS.
+   */
+  async markFailed(applicantId: string, reason: string): Promise<void> {
+    await db
+      .update(applicants)
+      .set({
+        status: "FAILED",
+        pauseReason: reason,
+        pausedAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .where(eq(applicants.id, applicantId));
+  }
 }

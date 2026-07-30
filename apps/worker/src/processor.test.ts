@@ -184,6 +184,44 @@ describe("processAutomationJob", () => {
     expect(actions).toContain("automation_job_attempt_failed");
   });
 
+  it("marks the applicant FAILED once technical retries are exhausted", async () => {
+    const emailVerificationWorker: IEmailVerificationWorker = {
+      findVerificationCode: vi.fn().mockRejectedValue(new TechnicalAutomationError("PAGE_UNAVAILABLE")),
+      handleSecurityChallenge: vi.fn(),
+    };
+    const markFailed = vi.fn();
+    const deps = buildDeps({
+      emailVerificationWorker,
+      applicantStatusRepository: { markAwaitingHumanAction: vi.fn(), markFailed },
+    });
+    const job = new FakeJob(baseJobData());
+    job.attemptsMade = 2; // 3a e ultima tentativa (opts.attempts = 3)
+
+    await expect(processAutomationJob(job, deps)).rejects.toThrow(TechnicalAutomationError);
+
+    expect(markFailed).toHaveBeenCalledWith("applicant-1", "PAGE_UNAVAILABLE");
+    const actions = deps.sink.mock.calls.map((c) => c[0].action);
+    expect(actions).toContain("automation_job_failed_final");
+  });
+
+  it("does NOT mark the applicant FAILED while retries remain", async () => {
+    const emailVerificationWorker: IEmailVerificationWorker = {
+      findVerificationCode: vi.fn().mockRejectedValue(new TechnicalAutomationError("TIMEOUT")),
+      handleSecurityChallenge: vi.fn(),
+    };
+    const markFailed = vi.fn();
+    const deps = buildDeps({
+      emailVerificationWorker,
+      applicantStatusRepository: { markAwaitingHumanAction: vi.fn(), markFailed },
+    });
+    const job = new FakeJob(baseJobData());
+    job.attemptsMade = 0; // 1a de 3 tentativas
+
+    await expect(processAutomationJob(job, deps)).rejects.toThrow(TechnicalAutomationError);
+
+    expect(markFailed).not.toHaveBeenCalled();
+  });
+
   it("releases concurrency locks even when the step throws", async () => {
     const emailVerificationWorker: IEmailVerificationWorker = {
       findVerificationCode: vi

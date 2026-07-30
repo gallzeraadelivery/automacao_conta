@@ -39,6 +39,7 @@ export interface ApplicantStatusRepository {
   markAwaitingHumanAction(applicantId: string, reason: string): Promise<void>;
   markInProgress?(applicantId: string, currentStep: string): Promise<void>;
   markCompleted?(applicantId: string): Promise<void>;
+  markFailed?(applicantId: string, reason: string): Promise<void>;
 }
 
 /**
@@ -206,12 +207,21 @@ async function handleJobError(
   const attempt = job.attemptsMade + 1;
   const maxAttempts = job.opts.attempts ?? MAX_ATTEMPTS;
   const reason = error instanceof TechnicalAutomationError ? error.reason : "UNKNOWN";
+  const exhausted = attempt >= maxAttempts;
 
   await deps.auditLogger.log({
     companyId: data.companyId,
     applicantId: data.applicantId,
-    action:
-      attempt >= maxAttempts ? "automation_job_failed_final" : "automation_job_attempt_failed",
+    action: exhausted ? "automation_job_failed_final" : "automation_job_attempt_failed",
     metadata: { step: data.currentStep, reason, retryable: true, attempt, maxAttempts },
   });
+
+  // Sem isso, um erro tecnico (ex: seletor errado, ainda nao validado
+  // contra o site real) que esgota as tentativas deixaria o motorista
+  // "IN_PROGRESS" para sempre, silenciosamente - sem aparecer na Central de
+  // Pendencias (que so lista AWAITING_HUMAN_ACTION) nem em lugar nenhum
+  // visivel para o operador.
+  if (exhausted) {
+    await deps.applicantStatusRepository?.markFailed?.(data.applicantId, String(reason));
+  }
 }
