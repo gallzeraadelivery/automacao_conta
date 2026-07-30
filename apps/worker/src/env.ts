@@ -30,6 +30,23 @@ const envSchema = z.object({
    * não padrão.
    */
   PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH: z.string().optional(),
+  /**
+   * false = abre uma janela de navegador de verdade (só funciona rodando o
+   * worker fora do Docker, numa máquina com tela) - útil para acompanhar ao
+   * vivo o primeiro teste real (AUTOMATION_TARGET=production). Padrão true
+   * (sem interface, como sempre roda em produção/Docker).
+   */
+  AUTOMATION_HEADLESS: z
+    .string()
+    .default("true")
+    .transform((v) => v !== "false"),
+  /**
+   * Pasta onde screenshots de PAUSED/ERROR são salvos (ver
+   * captureDebugScreenshot em uberAutomationRunner.ts) - ajuda a diagnosticar
+   * seletores errados sem precisar de tela. Path relativo resolve a partir
+   * do cwd do processo (apps/worker em dev, /app em Docker).
+   */
+  AUTOMATION_SCREENSHOTS_PATH: z.string().default("storage/automation-screenshots"),
 });
 
 export const env = envSchema.parse(process.env);

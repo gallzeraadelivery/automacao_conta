@@ -1,4 +1,6 @@
-import { chromium } from "playwright";
+import path from "node:path";
+import { mkdir } from "node:fs/promises";
+import { chromium, type Page } from "playwright";
 import { AuditLogger } from "@uber-automation/security";
 import type { IEmailVerificationWorker } from "@uber-automation/email-service";
 import { BrowserProfileManager, type BrowserProfile } from "@uber-automation/automation";
@@ -104,7 +106,7 @@ export function createUberAutomationRunner(
     const isProduction = env.AUTOMATION_TARGET === "production";
 
     const browser = await chromium.launch({
-      headless: true,
+      headless: env.AUTOMATION_HEADLESS,
       executablePath: env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH,
     });
 
@@ -153,24 +155,52 @@ export function createUberAutomationRunner(
       };
 
       const result: AutomationResult = await adapter.start(automationContext);
-      handleResult(result);
+      const screenshotPath = await captureDebugScreenshot(page, data.applicantId, result.status);
+      handleResult(result, screenshotPath);
     } finally {
       await browser.close().catch(() => undefined);
     }
   };
 }
 
-function handleResult(result: AutomationResult): void {
+/**
+ * Salva um screenshot em PAUSED/VERIFICATION_DETECTED/ERROR - único jeito
+ * prático de diagnosticar um seletor errado quando o worker roda sem tela
+ * (Docker/headless). Nunca falha o job por conta disso (best-effort).
+ */
+async function captureDebugScreenshot(
+  page: Page,
+  applicantId: string,
+  status: AutomationResult["status"],
+): Promise<string | undefined> {
+  if (status === "SUCCESS") return undefined;
+  try {
+    await mkdir(env.AUTOMATION_SCREENSHOTS_PATH, { recursive: true });
+    const fileName = `${applicantId}-${status}-${Date.now()}.png`;
+    const filePath = path.join(env.AUTOMATION_SCREENSHOTS_PATH, fileName);
+    await page.screenshot({ path: filePath, fullPage: true });
+    return filePath;
+  } catch {
+    return undefined;
+  }
+}
+
+function handleResult(result: AutomationResult, screenshotPath?: string): void {
   if (result.status === "SUCCESS") return;
+
+  const screenshotSuffix = screenshotPath ? ` [screenshot: ${screenshotPath}]` : "";
 
   if (result.status === "PAUSED" || result.status === "VERIFICATION_DETECTED") {
     // `pauseReason` é sempre preenchido pelo adaptador nesses dois status -
     // ver PlatformAdapter.start() em packages/platform-adapters.
-    throw new NonRetryableAutomationError(result.pauseReason!, result.error?.message);
+    throw new NonRetryableAutomationError(
+      result.pauseReason!,
+      (result.error?.message ?? "") + screenshotSuffix,
+    );
   }
 
   throw new TechnicalAutomationError(
     toTechnicalReason(result.error?.code ?? "PAGE_UNAVAILABLE"),
-    result.error?.message,
+    (result.error?.message ?? "") + screenshotSuffix,
   );
 }

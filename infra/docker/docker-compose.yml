@@ -83,8 +83,15 @@ services:
       # subir. Trocar AUTOMATION_TARGET para "production" também precisa
       # trocar este valor (ou removê-lo) - ver SECURITY.md antes de fazer isso.
       MOCK_UBER_BASE_URL: http://mock-server:3001/mock-uber
+      # Screenshot automático em pausas/erros da automação (nunca em
+      # sucesso) - ver captureDebugScreenshot em uberAutomationRunner.ts.
+      # Bind mount (não volume nomeado) de propósito: dá pra abrir os PNGs
+      # direto em ./storage/automation-screenshots na sua máquina, sem
+      # precisar de `docker cp`.
+      AUTOMATION_SCREENSHOTS_PATH: /app/storage/automation-screenshots
     volumes:
       - browser_profiles_data:/app/storage/browser-profiles
+      - ../../storage/automation-screenshots:/app/storage/automation-screenshots
     depends_on:
       postgres:
         condition: service_healthy
