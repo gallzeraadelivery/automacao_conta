@@ -76,6 +76,23 @@ escolhido pela plataforma, ou cancele/recrie cadastros automaticamente.
   ver [`packages/verification-detector/README.md`](./packages/verification-detector/README.md)
   e o [relatório de precisão](./packages/verification-detector/ACCURACY_REPORT.md).
 
+## Fase 5 — o que já existe
+
+- **UberDriverApplicationAdapter** (`packages/platform-adapters`): navega pelo
+  login e formulário administrativo do cadastro de motorista parceiro da Uber,
+  resolve o código de verificação por e-mail (Fase 2) e **para imediatamente**
+  ao encontrar qualquer etapa sensível (foto de perfil, CNH, CAPTCHA, 2FA,
+  bloqueio de segurança) - identificada de forma puramente informativa via o
+  `VerificationFlowDetector` (Fase 4) - entregando a sessão para o motorista
+  concluir pessoalmente. URLs/timeouts (`config.ts`) e seletores CSS
+  (`selectors.ts`) ficam totalmente separados da lógica de automação
+  (`steps/*.ts`), para que uma mudança de layout da Uber nunca exija tocar em
+  lógica. Validado com **100% de acerto (8/8)** nos cenários da Fase 3,
+  executando o adaptador real com um **Chromium headless real** (não só lendo
+  HTML) contra `apps/mock-server` - ver
+  [`packages/platform-adapters/README.md`](./packages/platform-adapters/README.md)
+  e o [relatório de testes](./packages/platform-adapters/TEST_REPORT.md).
+
 ## Estrutura
 
 ```
@@ -94,7 +111,7 @@ uber-automation/
 │   ├── automation/                # BrowserProfileManager (sessões isoladas)
 │   ├── email-service/              # EmailVerificationWorker (Gmail via Playwright)
 │   ├── verification-detector/       # VerificationFlowDetector (deteção informativa de provedor)
-│   └── platform-adapters/            # (stub — Fase 5+, preenchimento do form Uber)
+│   └── platform-adapters/            # UberDriverApplicationAdapter (login, formulário, e-mail, pausa em etapa sensível)
 └── infra/docker/    # Dockerfiles e docker-compose.yml
 ```
 
@@ -164,7 +181,7 @@ uber-automation/
 pnpm test
 ```
 
-138 testes, nenhum exige Postgres/Redis reais (usam fakes/mocks injetados via DI - ver
+150 testes, nenhum exige Postgres/Redis reais (usam fakes/mocks injetados via DI - ver
 `packages/*/src/**/*.test.ts` e `apps/*/src/**/*.test.ts`). Cobrem:
 
 - Validações de importação (`packages/shared`): email inválido, duplicidade no arquivo,
@@ -194,6 +211,15 @@ pnpm test
   buscam o HTML real do `apps/mock-server` via `supertest` e rodam o detector contra
   ele - inclui os 8 cenários da Fase 4 e a página de login (nunca classificada como
   verificação/desafio).
+- **UberDriverApplicationAdapter (Fase 5)** (`packages/platform-adapters`): 12 testes
+  rodando o adaptador real com um **Chromium headless real** (via Playwright) contra
+  `apps/mock-server` numa porta efêmera - preenche formulários e clica em botões de
+  verdade, não só lê HTML. Cobre os 8 cenários da Fase 3 (foto de perfil e CNH:
+  Socure/outro provedor/desconhecido; CAPTCHA; 2FA; bloqueio de segurança - sempre
+  pausando, nunca resolvendo/contornando), a progressão de `currentStep` no fluxo
+  completo, conclusão (`SUCCESS`) quando nenhuma etapa sensível é encontrada, e
+  tratamento de erro (não uma exceção crua) quando a credencial de login está
+  corrompida.
 
 Validações que dependem do banco (duplicidade já existente na empresa, proxy
 inexistente, e-mail já associado a outro motorista) são testadas na camada de serviço da
@@ -372,13 +398,16 @@ de chave).
   retentado - o job é descartado via `job.discard()` e o motorista passa para
   `AWAITING_HUMAN_ACTION`, que já aparece no dashboard/listagem existentes).
 
-## Próximos passos (Fase 5+)
+## Próximos passos (Fase 6+)
 
-Consulte as fases seguintes conforme forem detalhadas. Com o ambiente de testes local
-(Fase 3) e o detector de provedor (Fase 4) no lugar, a próxima fase deve implementar as
-etapas de preenchimento do formulário em `packages/platform-adapters` (hoje um stub)
-contra o `apps/mock-server`, conectá-las à fila `automation-jobs` (hoje só executa o
-passo `AWAIT_EMAIL_CODE`), e usar o `VerificationFlowDetector` já validado para decidir,
-a cada etapa: continuar preenchendo dados administrativos, ou parar e marcar
-`AWAITING_HUMAN_ACTION` assim que uma página de foto/CNH/CAPTCHA/2FA/bloqueio for
-detectada - nunca tentando prosseguir sozinha por essas etapas.
+Consulte as fases seguintes conforme forem detalhadas. Com o `UberDriverApplicationAdapter`
+(Fase 5) validado contra o `apps/mock-server`, a próxima fase deve conectá-lo à fila
+`automation-jobs` (`apps/worker`, hoje só executa o passo `AWAIT_EMAIL_CODE`): abrir um
+navegador real por `browserProfileId` (via `@uber-automation/automation`
+`BrowserProfileManager`, que já isola sessão/cookies por motorista), instanciar o
+adaptador com esse `Page`, e mapear `AutomationResult.pauseReason` diretamente para
+`NonRetryableAutomationError` (`apps/worker/src/errors.ts`) - os valores já foram
+desenhados para bater 1:1, sem tradução. Também vale considerar: retomar um job pausado
+depois que o motorista concluir a etapa sensível pessoalmente, e validar os seletores de
+`packages/platform-adapters/src/adapters/uber/selectors.ts` contra o site real da Uber
+(documentado como não validado neste ambiente).

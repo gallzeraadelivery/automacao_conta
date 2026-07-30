@@ -7,10 +7,22 @@
   "types": "./src/index.ts",
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "build": "tsc -p tsconfig.json"
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "report": "tsx generate-report.mjs"
   },
-  "dependencies": {},
+  "dependencies": {
+    "@uber-automation/credential-vault": "workspace:*",
+    "@uber-automation/email-service": "workspace:*",
+    "@uber-automation/security": "workspace:*",
+    "@uber-automation/verification-detector": "workspace:*",
+    "playwright": "^1.46.1"
+  },
   "devDependencies": {
-    "typescript": "^5.5.4"
+    "@uber-automation/mock-server": "workspace:*",
+    "@types/node": "^22.5.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.5.4",
+    "vitest": "^2.0.5"
   }
 }
