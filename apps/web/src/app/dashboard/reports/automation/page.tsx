@@ -18,8 +18,16 @@ import { StatCard } from "@/components/StatCard";
 import { ReportExportBar } from "@/components/ReportExportBar";
 import { formatDuration, type AutomationReport } from "@/lib/reports";
 
-const STATUS_COLORS = ["#16a34a", "#dc2626", "#f59e0b"];
-const PROVIDER_COLORS = ["#3b5bfd", "#94a3b8", "#cbd5e1"];
+const STATUS_COLORS: Record<string, string> = {
+  Sucesso: "#16a34a",
+  Falha: "#dc2626",
+  Pausado: "#f59e0b",
+};
+const PROVIDER_COLORS: Record<string, string> = {
+  Socure: "#3b5bfd",
+  "Outro provedor": "#94a3b8",
+  Desconhecido: "#cbd5e1",
+};
 
 function isoDate(date: Date): string {
   return date.toISOString().slice(0, 10);
@@ -105,8 +113,8 @@ export default function AutomationReportPage() {
                 <ResponsiveContainer width="100%" height={240}>
                   <PieChart>
                     <Pie data={statusData} dataKey="value" nameKey="name" outerRadius={90} label>
-                      {statusData.map((entry, index) => (
-                        <Cell key={entry.name} fill={STATUS_COLORS[index % STATUS_COLORS.length]} />
+                      {statusData.map((entry) => (
+                        <Cell key={entry.name} fill={STATUS_COLORS[entry.name] ?? "#cbd5e1"} />
                       ))}
                     </Pie>
                     <Tooltip />
@@ -126,11 +134,8 @@ export default function AutomationReportPage() {
                   <YAxis allowDecimals={false} tick={{ fontSize: 12 }} />
                   <Tooltip />
                   <Bar dataKey="value">
-                    {providerData.map((entry, index) => (
-                      <Cell
-                        key={entry.name}
-                        fill={PROVIDER_COLORS[index % PROVIDER_COLORS.length]}
-                      />
+                    {providerData.map((entry) => (
+                      <Cell key={entry.name} fill={PROVIDER_COLORS[entry.name] ?? "#cbd5e1"} />
                     ))}
                   </Bar>
                 </BarChart>

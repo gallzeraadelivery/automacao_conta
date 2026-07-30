@@ -21,9 +21,19 @@ const periodQuerySchema = z.object({
 const DEFAULT_PERIOD_DAYS = 30;
 
 function resolvePeriod(query: { from?: Date; to?: Date }): ReportPeriod {
-  const to = query.to ?? new Date();
+  // `to` é documentado como `format: date` (openapi.yaml), não date-time - um
+  // valor explícito (ex: "2026-07-30") deve incluir o dia inteiro, não parar
+  // à meia-noite do início dele (senão "até hoje" excluiria tudo que
+  // aconteceu hoje).
+  const to = query.to ? endOfDay(query.to) : new Date();
   const from = query.from ?? new Date(to.getTime() - DEFAULT_PERIOD_DAYS * 24 * 60 * 60 * 1000);
   return { from, to };
+}
+
+function endOfDay(date: Date): Date {
+  const end = new Date(date);
+  end.setUTCHours(23, 59, 59, 999);
+  return end;
 }
 
 reportsRouter.get("/automation", async (req, res, next) => {
