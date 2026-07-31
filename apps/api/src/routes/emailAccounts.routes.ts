@@ -1,5 +1,7 @@
 import { Router } from "express";
 import { z } from "zod";
+import { testImapConnectivity } from "@uber-automation/email-service";
+import { maskEmail } from "@uber-automation/security";
 import { authenticate, requireRole } from "../middleware/auth";
 import { uploadSpreadsheet } from "../middleware/upload";
 import { HttpError } from "../middleware/errorHandler";
@@ -58,6 +60,35 @@ emailAccountsRouter.post(
     }
   },
 );
+
+const testImapSchema = z.object({
+  email: z.string().email(),
+  password: z.string().min(1),
+});
+
+/**
+ * Testa se um e-mail aceita IMAP com a senha direta ANTES de importar um
+ * lote inteiro - descoberto na prática que contas de um mesmo fornecedor
+ * podem ter políticas diferentes (2FA/"less secure apps" bloqueando IMAP em
+ * algumas, liberado em outras). Não persiste nada - só conecta e testa.
+ */
+emailAccountsRouter.post("/test-imap", requireRole("admin", "operator"), async (req, res, next) => {
+  try {
+    const { email, password } = testImapSchema.parse(req.body);
+    const result = await testImapConnectivity(email, password);
+
+    await logAudit({
+      companyId: req.user!.companyId,
+      operatorId: req.user!.operatorId,
+      action: "test_imap_access",
+      metadata: { email: maskEmail(email), success: result.success, error: result.error },
+    });
+
+    return res.json({ success: true, data: result });
+  } catch (error) {
+    return next(error);
+  }
+});
 
 const listQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),

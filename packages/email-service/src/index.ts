@@ -21,6 +21,7 @@ export {
 } from "./emailVerificationWorker";
 export { PlaywrightGmailClient, GMAIL_SELECTORS } from "./playwrightGmailClient";
 export { ImapEmailClient, type ImapEmailClientOptions } from "./imapEmailClient";
+export { testImapConnectivity, type ImapTestResult } from "./imapTest";
 export type {
   EmailAccountRepository,
   EmailAccountCredentialRecord,

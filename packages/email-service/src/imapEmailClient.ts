@@ -11,6 +11,8 @@ import type {
 export interface ImapEmailClientOptions {
   host?: string;
   port?: number;
+  /** Repassado direto pro `ImapFlow` - default da lib é 90s, longo demais pra um botão de teste interativo. */
+  connectionTimeout?: number;
 }
 
 const DEFAULT_HOST = "imap.gmail.com";
@@ -50,11 +52,13 @@ function enrichImapError(error: unknown): Error {
 export class ImapEmailClient implements IGmailClient {
   private readonly host: string;
   private readonly port: number;
+  private readonly connectionTimeout?: number;
   private client?: ImapFlow;
 
   constructor(options: ImapEmailClientOptions = {}) {
     this.host = options.host ?? DEFAULT_HOST;
     this.port = options.port ?? DEFAULT_PORT;
+    this.connectionTimeout = options.connectionTimeout;
   }
 
   async login(
@@ -68,6 +72,7 @@ export class ImapEmailClient implements IGmailClient {
       secure: true,
       auth: { user: email, pass: password },
       logger: false,
+      connectionTimeout: this.connectionTimeout,
     });
     try {
       await this.client.connect();

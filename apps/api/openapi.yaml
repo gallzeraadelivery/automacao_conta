@@ -405,6 +405,25 @@ paths:
         "200": { description: Lista }
         "401": { $ref: "#/components/responses/Unauthorized" }
 
+  /api/email-accounts/test-imap:
+    post:
+      tags: [email-accounts]
+      summary: Testa se um e-mail/senha aceita IMAP direto, antes de importar um lote inteiro (nada é persistido)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string }
+      responses:
+        "200": { description: "{ success, latencyMs, error? }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
   /api/proxies:
     post:
       tags: [proxies]

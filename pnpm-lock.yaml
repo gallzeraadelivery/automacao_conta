@@ -38,6 +38,9 @@ importers:
       '@uber-automation/database':
         specifier: workspace:*
         version: link:../../packages/database
+      '@uber-automation/email-service':
+        specifier: workspace:*
+        version: link:../../packages/email-service
       '@uber-automation/proxy-manager':
         specifier: workspace:*
         version: link:../../packages/proxy-manager
