@@ -24,7 +24,11 @@ import type {
  * inerentemente frágil.
  */
 export const GMAIL_SELECTORS = {
-  emailInput: "input[type='email']",
+  // "#identifierId" e o id do campo de e-mail na tela de login do Google ha
+  // anos (bem mais estavel queso `input[type='email']`, que uma screenshot
+  // de diagnostico mostrou nao bater a tempo numa execucao real via proxy -
+  // combinar os dois cobre tanto a estrutura antiga quanto variacoes atuais).
+  emailInput: "#identifierId, input[type='email']",
   emailNextButton: "#identifierNext",
   passwordInput: "input[type='password']",
   passwordNextButton: "#passwordNext",
@@ -33,6 +37,12 @@ export const GMAIL_SELECTORS = {
   messageSubject: "span.bog",
   messageSnippet: "span.y2",
 };
+
+// Proxies (principalmente residenciais/rotativos) adicionam latencia real -
+// ja observado nesta automacao em outra etapa (timeout de 30s so pra
+// carregar drivers.uber.com). O timeout padrao do Playwright (30s) pode nao
+// sobrar margem nenhuma depois do carregamento inicial da pagina do Google.
+const ELEMENT_TIMEOUT_MS = 60000;
 
 const CHALLENGE_URL_PATTERNS: Array<{ pattern: RegExp; type: SecurityChallengeType }> = [
   { pattern: /challenge\/totp/i, type: "TWO_FACTOR" },
@@ -91,18 +101,22 @@ export class PlaywrightGmailClient implements IGmailClient {
       return;
     }
 
-    await this.page.fill(GMAIL_SELECTORS.emailInput, email);
-    await this.page.click(GMAIL_SELECTORS.emailNextButton);
+    await this.page.waitForSelector(GMAIL_SELECTORS.emailInput, {
+      state: "visible",
+      timeout: ELEMENT_TIMEOUT_MS,
+    });
+    await this.page.fill(GMAIL_SELECTORS.emailInput, email, { timeout: ELEMENT_TIMEOUT_MS });
+    await this.page.click(GMAIL_SELECTORS.emailNextButton, { timeout: ELEMENT_TIMEOUT_MS });
 
     await this.page.waitForLoadState("domcontentloaded");
     if (await this.hasChallengeIndicator()) return; // deixa detectSecurityChallenge classificar
 
     await this.page
-      .waitForSelector(GMAIL_SELECTORS.passwordInput, { timeout: 15000 })
+      .waitForSelector(GMAIL_SELECTORS.passwordInput, { timeout: ELEMENT_TIMEOUT_MS })
       .catch(() => null);
     // A senha e usada uma unica vez aqui e nunca retida em outra variavel.
-    await this.page.fill(GMAIL_SELECTORS.passwordInput, password);
-    await this.page.click(GMAIL_SELECTORS.passwordNextButton);
+    await this.page.fill(GMAIL_SELECTORS.passwordInput, password, { timeout: ELEMENT_TIMEOUT_MS });
+    await this.page.click(GMAIL_SELECTORS.passwordNextButton, { timeout: ELEMENT_TIMEOUT_MS });
     await this.page.waitForLoadState("domcontentloaded");
   }
 
