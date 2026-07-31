@@ -15,6 +15,7 @@ export function PendingActionDetail({ id }: { id: string }) {
   const [screenshotState, setScreenshotState] = useState<"idle" | "loading" | "unavailable">(
     "idle",
   );
+  const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
 
   const reload = useCallback(async () => {
     const [detailResult, logsResult] = await Promise.all([
@@ -42,6 +43,56 @@ export function PendingActionDetail({ id }: { id: string }) {
       setScreenshotState(result.success ? "idle" : "unavailable");
     });
   }, [id]);
+
+  function buildLogText(): string {
+    const header = [
+      `Motorista: ${item?.applicantName ?? "-"} (${item?.email ?? "-"})`,
+      `Status: ${item?.status ?? "-"}`,
+      `Etapa atual: ${item?.currentStep ?? "-"}`,
+      `Motivo da pausa: ${pauseReasonLabel(item?.pauseReason ?? null)}`,
+      `Pausado em: ${item?.pausedAt ? new Date(item.pausedAt).toLocaleString("pt-BR") : "-"}`,
+      "",
+    ].join("\n");
+
+    const body = (logs ?? [])
+      .map((log) => {
+        const detail = log.metadataSanitized?.detail;
+        const when = new Date(log.createdAt).toLocaleString("pt-BR");
+        const detailLine = typeof detail === "string" && detail.trim() !== "" ? `\n${detail}` : "";
+        return `[${when}] ${log.action}${detailLine}`;
+      })
+      .join("\n\n");
+
+    return header + body;
+  }
+
+  async function handleCopyAll() {
+    const text = buildLogText();
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopyState("copied");
+    } catch {
+      // Contextos sem `navigator.clipboard` (ex: HTTP sem localhost) caem
+      // aqui - copia via um textarea temporário + document.execCommand,
+      // suportado por navegadores antigos como fallback.
+      const textarea = document.createElement("textarea");
+      textarea.value = text;
+      textarea.style.position = "fixed";
+      textarea.style.opacity = "0";
+      document.body.appendChild(textarea);
+      textarea.focus();
+      textarea.select();
+      try {
+        document.execCommand("copy");
+        setCopyState("copied");
+      } catch {
+        setCopyState("failed");
+      } finally {
+        document.body.removeChild(textarea);
+      }
+    }
+    setTimeout(() => setCopyState("idle"), 2500);
+  }
 
   async function runAction(action: "RESOLVED" | "CANCELLED" | "MANUAL_REVIEW") {
     setBusy(true);
@@ -165,7 +216,21 @@ export function PendingActionDetail({ id }: { id: string }) {
       </div>
 
       <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-        <h2 className="mb-3 text-sm font-semibold text-slate-900">Histórico / logs de auditoria</h2>
+        <div className="mb-3 flex items-center justify-between gap-4">
+          <h2 className="text-sm font-semibold text-slate-900">Histórico / logs de auditoria</h2>
+          {logs && logs.length > 0 && (
+            <button
+              onClick={handleCopyAll}
+              className="rounded-md border border-slate-300 px-3 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50"
+            >
+              {copyState === "copied"
+                ? "Copiado!"
+                : copyState === "failed"
+                  ? "Não foi possível copiar"
+                  : "Copiar tudo"}
+            </button>
+          )}
+        </div>
         {!logs || logs.length === 0 ? (
           <p className="text-sm text-slate-500">Nenhum evento registrado ainda.</p>
         ) : (
