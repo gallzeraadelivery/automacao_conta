@@ -26,14 +26,23 @@ RUN pnpm install --frozen-lockfile --prod
 
 FROM base AS runtime
 ENV NODE_ENV=production
+# @uber-automation/proxy-manager (usado pela rota POST /api/proxies/:id/test)
+# abre um Chromium real via Playwright para testar proxy com o mesmo motor
+# que a automação de verdade usa (apps/worker) - ver comentário em
+# testConnectivity.ts. Caminho próprio (não o default em ~/.cache) porque o
+# container roda como usuário não-root depois - mesmo padrão de Dockerfile.worker.
+ENV PLAYWRIGHT_BROWSERS_PATH=/app/.playwright-browsers
+
 RUN groupadd --system --gid 1001 nodeapp \
   && useradd --system --uid 1001 --gid nodeapp --home-dir /app apiuser
-COPY --from=deps --chown=apiuser:nodeapp /app ./
-# COPY --chown só ajusta a dona do conteúdo copiado, não do diretório /app em
-# si (criado como root pelo WORKDIR na stage `base`) - sem isso, `pnpm start`
-# rodando como `apiuser` falha ao tentar criar /app/.cache/node/corepack
-# (EACCES: permission denied). Mesmo ajuste já usado em Dockerfile.worker.
-RUN chown apiuser:nodeapp /app
+COPY --from=deps /app ./
+# --with-deps instala também as bibliotecas de sistema do Chromium (root
+# necessário aqui - por isso roda antes de trocar para o usuário sem privilégios).
+RUN npx --yes playwright install --with-deps chromium
+# chown -R (não só do /app raiz) porque agora existe conteúdo real criado
+# como root nesta stage (.playwright-browsers) além do problema de
+# EACCES no cache do corepack já documentado - mesmo padrão de Dockerfile.worker.
+RUN chown -R apiuser:nodeapp /app
 USER apiuser
 
 EXPOSE 4000
