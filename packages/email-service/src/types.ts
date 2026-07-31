@@ -90,4 +90,12 @@ export interface IGmailClient {
   searchMessages(query: { afterDate: Date; maxResults?: number }): Promise<GmailMessage[]>;
   saveSession(): Promise<GmailSessionData>;
   close(): Promise<void>;
+  /**
+   * Screenshot da página atual, best-effort - opcional porque o mock usado
+   * nos testes não tem página nenhuma. Sem isso, uma falha aqui (ex: Gmail
+   * bloqueando o login automatizado) não deixava nenhum rastro visual,
+   * diferente das falhas na automação principal (ver captureDebugScreenshot
+   * em uberAutomationRunner.ts).
+   */
+  screenshot?(): Promise<Buffer | undefined>;
 }

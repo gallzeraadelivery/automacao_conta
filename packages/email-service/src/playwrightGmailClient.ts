@@ -106,6 +106,10 @@ export class PlaywrightGmailClient implements IGmailClient {
     await this.page.waitForLoadState("domcontentloaded");
   }
 
+  async screenshot(): Promise<Buffer | undefined> {
+    return this.page?.screenshot({ fullPage: true }).catch(() => undefined);
+  }
+
   async detectSecurityChallenge(): Promise<SecurityChallengeType | null> {
     if (!this.page) return null;
     const url = this.page.url();

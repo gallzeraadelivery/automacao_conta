@@ -1,6 +1,8 @@
 import { EmailVerificationWorker } from "@uber-automation/email-service";
 import type { AuditLogger } from "@uber-automation/security";
 import type { BrowserProfileManager } from "@uber-automation/automation";
+import { resolveProxyConnection } from "./proxyConnection";
+import { saveDebugScreenshot } from "./screenshotStorage";
 
 /**
  * `EmailVerificationWorker` só recebe `companyId` na construção (usado
@@ -19,6 +21,24 @@ export function createScopedEmailVerificationWorker(
   return new EmailVerificationWorker({
     auditLogger,
     companyId,
+    // Faltava isso: sem essa linha, o login no Gmail sempre acontecia sem
+    // proxy nenhum, mesmo quando o motorista tinha um proxy configurado -
+    // uma navegação direta do IP do servidor, diferente de toda a automação
+    // principal na Uber (ver uberAutomationRunner.ts, que já aplica o
+    // proxy corretamente em modo production).
+    async resolveProxyConnection(proxyId) {
+      const connection = await resolveProxyConnection(proxyId);
+      return connection ?? undefined;
+    },
+    // Sem screenshot aqui, uma falha no login do Gmail (ex: bloqueio de
+    // automação do próprio Google) não deixava nenhum rastro visual - só a
+    // automação principal na Uber tinha isso (ver captureDebugScreenshot em
+    // uberAutomationRunner.ts). Tag "EMAIL" para diferenciar no nome do
+    // arquivo dos screenshots da automação principal (tag é o status:
+    // PAUSED/ERROR/etc).
+    async captureDebugScreenshot(applicantId, buffer) {
+      return saveDebugScreenshot(buffer, applicantId, "EMAIL");
+    },
     browserProfileHooks: {
       async loadGmailSession(applicantId) {
         const profileId = await browserProfileManager.getActiveProfileId(applicantId);

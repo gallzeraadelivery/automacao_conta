@@ -30,6 +30,13 @@ export interface EmailVerificationWorkerOptions {
   companyId?: string;
   browserProfileHooks?: BrowserProfileHooks;
   resolveProxyConnection?: (proxyId: string) => Promise<ProxyConnectionOptions | undefined>;
+  /**
+   * Salva em disco a screenshot best-effort tirada quando o login/busca
+   * falha (ex: Gmail bloqueando o login automatizado) - injetado porque
+   * este pacote não conhece o filesystem/caminho de screenshots do worker
+   * (ver captureDebugScreenshot em apps/worker/src/uberAutomationRunner.ts).
+   */
+  captureDebugScreenshot?: (applicantId: string, buffer: Buffer) => Promise<string | undefined>;
 }
 
 const SEARCH_WINDOW_MAX_RESULTS = 20;
@@ -53,6 +60,10 @@ export class EmailVerificationWorker implements IEmailVerificationWorker {
   private readonly resolveProxyConnection?: (
     proxyId: string,
   ) => Promise<ProxyConnectionOptions | undefined>;
+  private readonly captureDebugScreenshot?: (
+    applicantId: string,
+    buffer: Buffer,
+  ) => Promise<string | undefined>;
 
   constructor(options: EmailVerificationWorkerOptions = {}) {
     this.gmailClientFactory = options.gmailClientFactory ?? (() => new PlaywrightGmailClient());
@@ -65,6 +76,7 @@ export class EmailVerificationWorker implements IEmailVerificationWorker {
     this.companyId = options.companyId;
     this.browserProfileHooks = options.browserProfileHooks;
     this.resolveProxyConnection = options.resolveProxyConnection;
+    this.captureDebugScreenshot = options.captureDebugScreenshot;
   }
 
   async handleSecurityChallenge(
@@ -174,6 +186,17 @@ export class EmailVerificationWorker implements IEmailVerificationWorker {
       }
 
       return { code: candidate.code, confidence: candidate.confidence };
+    } catch (error) {
+      if (this.captureDebugScreenshot && client.screenshot) {
+        const buffer = await client.screenshot().catch(() => undefined);
+        const screenshotPath = buffer
+          ? await this.captureDebugScreenshot(context.applicantId, buffer).catch(() => undefined)
+          : undefined;
+        if (screenshotPath && error instanceof Error) {
+          error.message += ` [screenshot: ${screenshotPath}]`;
+        }
+      }
+      throw error;
     } finally {
       password = undefined;
       await client.close();
