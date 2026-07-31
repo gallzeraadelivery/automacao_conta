@@ -64,6 +64,11 @@ emailAccountsRouter.post(
 const testImapSchema = z.object({
   email: z.string().email(),
   password: z.string().min(1),
+  // Opcionais - sem eles, cai no default (imap.gmail.com:993). Qualquer
+  // provedor com IMAP (Outlook/Microsoft 365, Yahoo, cPanel, etc.) pode ser
+  // testado informando o host/porta certos aqui.
+  host: z.string().min(1).optional(),
+  port: z.coerce.number().int().min(1).max(65535).optional(),
 });
 
 /**
@@ -71,17 +76,24 @@ const testImapSchema = z.object({
  * lote inteiro - descoberto na prática que contas de um mesmo fornecedor
  * podem ter políticas diferentes (2FA/"less secure apps" bloqueando IMAP em
  * algumas, liberado em outras). Não persiste nada - só conecta e testa.
+ * Funciona pra qualquer provedor IMAP, não só Gmail - host/porta são
+ * configuráveis (default: imap.gmail.com:993).
  */
 emailAccountsRouter.post("/test-imap", requireRole("admin", "operator"), async (req, res, next) => {
   try {
-    const { email, password } = testImapSchema.parse(req.body);
-    const result = await testImapConnectivity(email, password);
+    const { email, password, host, port } = testImapSchema.parse(req.body);
+    const result = await testImapConnectivity(email, password, { host, port });
 
     await logAudit({
       companyId: req.user!.companyId,
       operatorId: req.user!.operatorId,
       action: "test_imap_access",
-      metadata: { email: maskEmail(email), success: result.success, error: result.error },
+      metadata: {
+        email: maskEmail(email),
+        host: host ?? "imap.gmail.com",
+        success: result.success,
+        error: result.error,
+      },
     });
 
     return res.json({ success: true, data: result });
