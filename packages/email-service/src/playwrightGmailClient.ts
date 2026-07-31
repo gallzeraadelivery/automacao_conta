@@ -101,6 +101,12 @@ export class PlaywrightGmailClient implements IGmailClient {
       return;
     }
 
+    // Checa o bloqueio de automacao do Google JA na primeira tela, antes de
+    // esperar por um campo que, quando bloqueado, nunca vai aparecer -
+    // senao o login so falharia por timeout depois de 60s inteiros, sem
+    // classificar corretamente o motivo (ver detectSecurityChallenge).
+    if (await this.hasChallengeIndicator()) return;
+
     await this.page.waitForSelector(GMAIL_SELECTORS.emailInput, {
       state: "visible",
       timeout: ELEMENT_TIMEOUT_MS,
@@ -138,6 +144,18 @@ export class PlaywrightGmailClient implements IGmailClient {
       .then((count) => count > 0)
       .catch(() => false);
     if (hasRecaptchaFrame) return "CAPTCHA";
+
+    // "Couldn't sign you in" / "doesn't support JavaScript" e a tela real
+    // que o Google mostra quando recusa um navegador automatizado - mesmo
+    // com JS de fato habilitado (confirmado com screenshot de uma execucao
+    // real, ver commit que introduziu este bloco). Texto, nao URL, porque a
+    // pagina nao navega pra uma URL de challenge reconhecivel nesse caso.
+    const hasAutomationBlock = await this.page
+      .getByText("Couldn't sign you in", { exact: false })
+      .count()
+      .then((count) => count > 0)
+      .catch(() => false);
+    if (hasAutomationBlock) return "AUTOMATION_BLOCKED";
 
     return null;
   }

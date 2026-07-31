@@ -1,4 +1,18 @@
-export type SecurityChallengeType = "TWO_FACTOR" | "CAPTCHA" | "PHONE_VERIFICATION";
+/**
+ * "AUTOMATION_BLOCKED" - o Google recusa o login com a tela "Couldn't sign
+ * you in" / "doesn't support JavaScript" quando detecta um navegador
+ * automatizado (headless), mesmo com JS habilitado de verdade - é a própria
+ * detecção de bot do Google, não um erro técnico. Nunca deve ser contornado
+ * (trocar user agent, sair de headless só pra isso, etc.) - ver regras de
+ * segurança do projeto. O caminho correto de verdade é a Gmail API com
+ * OAuth2 (ver comentário no fim de playwrightGmailClient.ts), não scraping
+ * de UI.
+ */
+export type SecurityChallengeType =
+  | "TWO_FACTOR"
+  | "CAPTCHA"
+  | "PHONE_VERIFICATION"
+  | "AUTOMATION_BLOCKED";
 
 export type CodeConfidence = "HIGH" | "MEDIUM" | "LOW";
 

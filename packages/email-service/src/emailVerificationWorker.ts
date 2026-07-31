@@ -212,6 +212,8 @@ function describeChallenge(challenge: SecurityChallengeType): string {
       return "Gmail apresentou um CAPTCHA - requer conclusão manual pelo motorista";
     case "PHONE_VERIFICATION":
       return "Gmail solicitou confirmação por telefone - requer conclusão manual pelo motorista";
+    case "AUTOMATION_BLOCKED":
+      return "Google recusou o login por detectar navegador automatizado (\"Couldn't sign you in\") - não deve ser contornado; peça ao motorista/atendente para pegar o código de verificação manualmente";
     default:
       return "Desafio de segurança desconhecido - requer conclusão manual pelo motorista";
   }

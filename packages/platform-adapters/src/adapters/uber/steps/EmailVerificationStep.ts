@@ -53,12 +53,14 @@ export async function runEmailVerificationStep(
   } catch (error) {
     if (error instanceof SecurityChallengeError) {
       // Desafio de segurança no próprio Gmail (não na Uber) - nunca resolvido
-      // aqui, só pausa. PHONE_VERIFICATION não tem uma categoria própria em
-      // AutomationPauseReason (que espelha o NonRetryableReason do worker),
-      // então é tratado como um bloqueio de segurança genérico.
-      throw new AutomationPauseSignal(
-        error.challenge === "PHONE_VERIFICATION" ? "SECURITY_BLOCK" : error.challenge,
-      );
+      // aqui, só pausa. PHONE_VERIFICATION e AUTOMATION_BLOCKED não têm uma
+      // categoria própria em AutomationPauseReason (que espelha o
+      // NonRetryableReason do worker), então caem no bloqueio genérico.
+      const reason =
+        error.challenge === "PHONE_VERIFICATION" || error.challenge === "AUTOMATION_BLOCKED"
+          ? "SECURITY_BLOCK"
+          : error.challenge;
+      throw new AutomationPauseSignal(reason);
     }
     if (error instanceof VerificationCodeNotFoundError) {
       // Transitório (o e-mail pode ainda não ter chegado) - o chamador

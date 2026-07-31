@@ -69,9 +69,15 @@ export async function fillEmailCodeStep(ctx: RealStepContext): Promise<void> {
     code = result.code;
   } catch (error) {
     if (error instanceof SecurityChallengeError) {
-      throw new AutomationPauseSignal(
-        error.challenge === "PHONE_VERIFICATION" ? "SECURITY_BLOCK" : error.challenge,
-      );
+      // PHONE_VERIFICATION e AUTOMATION_BLOCKED (Google recusando o login
+      // por detectar navegador automatizado) não têm um valor equivalente
+      // em NonRetryableReason - caem no bucket genérico SECURITY_BLOCK, já
+      // existente e exibido como "Bloqueio de segurança" no painel.
+      const reason =
+        error.challenge === "PHONE_VERIFICATION" || error.challenge === "AUTOMATION_BLOCKED"
+          ? "SECURITY_BLOCK"
+          : error.challenge;
+      throw new AutomationPauseSignal(reason);
     }
     if (error instanceof VerificationCodeNotFoundError) {
       throw new AutomationTechnicalError("EMAIL_CODE_NOT_FOUND", error.message);
