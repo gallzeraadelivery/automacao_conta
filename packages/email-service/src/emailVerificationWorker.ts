@@ -2,7 +2,7 @@ import { CredentialVault } from "@uber-automation/credential-vault";
 import { AuditLogger, maskCode, maskEmail } from "@uber-automation/security";
 import { extractVerificationCode } from "./codeExtractor";
 import { DrizzleEmailAccountRepository } from "./emailAccountRepository.drizzle";
-import { PlaywrightGmailClient } from "./playwrightGmailClient";
+import { ImapEmailClient } from "./imapEmailClient";
 import type { EmailAccountRepository } from "./emailAccountRepository";
 import type {
   FindVerificationCodeContext,
@@ -66,7 +66,12 @@ export class EmailVerificationWorker implements IEmailVerificationWorker {
   ) => Promise<string | undefined>;
 
   constructor(options: EmailVerificationWorkerOptions = {}) {
-    this.gmailClientFactory = options.gmailClientFactory ?? (() => new PlaywrightGmailClient());
+    // IMAP (não a antiga automação via navegador/PlaywrightGmailClient) é o
+    // padrão desde que confirmamos, contra uma conta real, que o Google
+    // bloqueia o login automatizado pela tela ("Couldn't sign you in") mas
+    // aceita IMAP normalmente com a mesma senha - PlaywrightGmailClient
+    // continua disponível/exportado, só não é mais o default.
+    this.gmailClientFactory = options.gmailClientFactory ?? (() => new ImapEmailClient());
     this.emailAccountRepository =
       options.emailAccountRepository ?? new DrizzleEmailAccountRepository();
     this.auditLogger = options.auditLogger ?? new AuditLogger();

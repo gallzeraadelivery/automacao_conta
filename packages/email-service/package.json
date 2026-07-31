@@ -14,9 +14,12 @@
     "@uber-automation/database": "workspace:*",
     "@uber-automation/security": "workspace:*",
     "drizzle-orm": "^0.33.0",
+    "imapflow": "^1.6.5",
+    "mailparser": "^3.9.14",
     "playwright": "^1.46.1"
   },
   "devDependencies": {
+    "@types/mailparser": "^3.4.6",
     "typescript": "^5.5.4",
     "vitest": "^2.0.5"
   }

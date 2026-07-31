@@ -20,6 +20,7 @@ export {
   type BrowserProfileHooks,
 } from "./emailVerificationWorker";
 export { PlaywrightGmailClient, GMAIL_SELECTORS } from "./playwrightGmailClient";
+export { ImapEmailClient, type ImapEmailClientOptions } from "./imapEmailClient";
 export type {
   EmailAccountRepository,
   EmailAccountCredentialRecord,
