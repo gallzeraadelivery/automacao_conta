@@ -17,6 +17,23 @@ const DEFAULT_HOST = "imap.gmail.com";
 const DEFAULT_PORT = 993;
 
 /**
+ * imapflow lança só "Command failed" na mensagem principal - o motivo de
+ * verdade (ex: "AUTHENTICATIONFAILED Invalid credentials", ou um aviso de
+ * throttling) fica em `responseText`/`responseStatus`, campos extras que
+ * não aparecem em `error.message` por padrão. Sem isso, o log de auditoria
+ * mostrava só "Command failed" e nada mais - inútil pra diagnosticar.
+ */
+function enrichImapError(error: unknown): Error {
+  if (!(error instanceof Error)) return new Error(String(error));
+  const responseStatus = (error as { responseStatus?: string }).responseStatus;
+  const responseText = (error as { responseText?: string }).responseText;
+  if (responseStatus || responseText) {
+    error.message = [error.message, responseStatus, responseText].filter(Boolean).join(" - ");
+  }
+  return error;
+}
+
+/**
  * Lê o código de verificação via IMAP (protocolo oficial de e-mail) em vez
  * de simular a tela de login do Gmail num navegador - evita por completo a
  * detecção de automação do Google ("Couldn't sign you in", ver
@@ -52,7 +69,11 @@ export class ImapEmailClient implements IGmailClient {
       auth: { user: email, pass: password },
       logger: false,
     });
-    await this.client.connect();
+    try {
+      await this.client.connect();
+    } catch (error) {
+      throw enrichImapError(error);
+    }
   }
 
   async detectSecurityChallenge(): Promise<SecurityChallengeType | null> {
@@ -87,6 +108,8 @@ export class ImapEmailClient implements IGmailClient {
         });
       }
       return messages;
+    } catch (error) {
+      throw enrichImapError(error);
     } finally {
       lock.release();
     }
