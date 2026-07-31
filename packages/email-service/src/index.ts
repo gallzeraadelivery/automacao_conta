@@ -17,10 +17,17 @@ export {
 export {
   EmailVerificationWorker,
   type EmailVerificationWorkerOptions,
+  type EmailClientFactoryContext,
   type BrowserProfileHooks,
 } from "./emailVerificationWorker";
 export { PlaywrightGmailClient, GMAIL_SELECTORS } from "./playwrightGmailClient";
 export { ImapEmailClient, type ImapEmailClientOptions } from "./imapEmailClient";
+export {
+  IMAP_PROVIDER_CONFIG,
+  normalizeImapProvider,
+  resolveImapOptions,
+  type KnownImapProvider,
+} from "./imapProviderConfig";
 export { testImapConnectivity, type ImapTestResult } from "./imapTest";
 export type {
   EmailAccountRepository,

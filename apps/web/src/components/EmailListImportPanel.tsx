@@ -26,6 +26,13 @@ interface ImportResult {
   invalidRows: InvalidRow[];
 }
 
+const EMAIL_PROVIDERS = [
+  { value: "gmail", label: "Gmail / Google Workspace" },
+  { value: "spacemail", label: "Spacemail" },
+  { value: "outlook", label: "Outlook / Microsoft 365" },
+  { value: "yahoo", label: "Yahoo" },
+] as const;
+
 const PLACEHOLDER = `TrixCordova6o365@colsced.us|Phat3479
 AerielSchneider06a5b@colsced.us|Phat3479
 KaylaTorres1ubd6@colsced.us|Phat3479`;
@@ -38,6 +45,7 @@ KaylaTorres1ubd6@colsced.us|Phat3479`;
  */
 export function EmailListImportPanel() {
   const [text, setText] = useState("");
+  const [provider, setProvider] = useState<(typeof EMAIL_PROVIDERS)[number]["value"]>("gmail");
   const [validation, setValidation] = useState<ValidationResult | null>(null);
   const [importResult, setImportResult] = useState<ImportResult | null>(null);
   const [loading, setLoading] = useState(false);
@@ -51,7 +59,7 @@ export function EmailListImportPanel() {
 
     const result = await apiRequest<ValidationResult>("/api/applicants/validate-email-list-import", {
       method: "POST",
-      body: JSON.stringify({ text }),
+      body: JSON.stringify({ text, provider }),
     });
 
     setLoading(false);
@@ -68,7 +76,7 @@ export function EmailListImportPanel() {
 
     const result = await apiRequest<ImportResult>("/api/applicants/email-list-import", {
       method: "POST",
-      body: JSON.stringify({ text }),
+      body: JSON.stringify({ text, provider }),
     });
 
     setLoading(false);
@@ -89,8 +97,26 @@ export function EmailListImportPanel() {
       <p className="mt-1 text-sm text-slate-500">
         Cole uma linha por motorista, no formato <code>email|senha</code>. O nome é extraído
         automaticamente do próprio e-mail (ex: &quot;TrixCordova6o365@...&quot; vira &quot;Trix
-        Cordova&quot;) — revise o preview antes de confirmar, a extração é melhor esforço.
+        Cordova&quot;) — revise o preview antes de confirmar, a extração é melhor esforço. Escolha
+        o provedor IMAP certo (ex: Spacemail) para a automação ler o código de verificação.
       </p>
+
+      <label className="mt-3 block text-sm text-slate-700">
+        Provedor de e-mail (IMAP)
+        <select
+          value={provider}
+          onChange={(event) =>
+            setProvider(event.target.value as (typeof EMAIL_PROVIDERS)[number]["value"])
+          }
+          className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm sm:max-w-xs"
+        >
+          {EMAIL_PROVIDERS.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+      </label>
 
       <textarea
         value={text}
@@ -132,7 +158,7 @@ export function EmailListImportPanel() {
         <div className="mt-4 space-y-4">
           <p className="text-sm text-slate-600">
             {validation.summary.validCount} válida(s), {validation.summary.invalidCount}{" "}
-            inválida(s) de {validation.summary.totalRows} linha(s).
+            inválida(s) de {validation.summary.totalRows} linha(s). Provedor: {provider}.
           </p>
 
           {validation.validRows.length > 0 && (

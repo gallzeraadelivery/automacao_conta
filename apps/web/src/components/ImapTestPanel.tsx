@@ -26,6 +26,7 @@ const PRESETS: Record<string, ImapPreset | null> = {
   gmail: { label: "Gmail / Google Workspace", host: "imap.gmail.com", port: 993 },
   outlook: { label: "Outlook / Microsoft 365", host: "outlook.office365.com", port: 993 },
   yahoo: { label: "Yahoo", host: "imap.mail.yahoo.com", port: 993 },
+  spacemail: { label: "Spacemail", host: "mail.spacemail.com", port: 993 },
   custom: null,
 };
 
@@ -80,8 +81,8 @@ export function ImapTestPanel() {
       <h2 className="text-sm font-semibold text-slate-900">Testar acesso IMAP de um e-mail</h2>
       <p className="mt-1 text-sm text-slate-500">
         Confirma se esse e-mail aceita leitura via IMAP com a senha normal antes de importar o
-        lote inteiro. Funciona com qualquer provedor IMAP, não só Gmail. Nada é salvo aqui - é só
-        um teste de conexão.
+        lote inteiro. Inclui Gmail, Outlook, Yahoo e Spacemail (mail.spacemail.com:993). Nada é
+        salvo aqui - é só um teste de conexão.
       </p>
 
       <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">

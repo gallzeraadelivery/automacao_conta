@@ -64,6 +64,12 @@ applicantsRouter.post(
 
 const emailListImportSchema = z.object({
   text: z.string().min(1, "Cole ao menos uma linha no formato email|senha"),
+  provider: z
+    .string()
+    .trim()
+    .min(1)
+    .optional()
+    .transform((value) => (value === "" || value === undefined ? "gmail" : value.toLowerCase())),
 });
 
 applicantsRouter.post(
@@ -85,14 +91,14 @@ applicantsRouter.post(
   requireRole("admin", "operator"),
   async (req, res, next) => {
     try {
-      const { text } = emailListImportSchema.parse(req.body);
-      const result = await importEmailList(req.user!.companyId, text);
+      const { text, provider } = emailListImportSchema.parse(req.body);
+      const result = await importEmailList(req.user!.companyId, text, { provider });
 
       await logAudit({
         companyId: req.user!.companyId,
         operatorId: req.user!.operatorId,
         action: "import_email_list",
-        metadata: { imported: result.imported, skipped: result.skipped },
+        metadata: { imported: result.imported, skipped: result.skipped, provider },
       });
 
       return res.json({ success: true, data: result });

@@ -3,6 +3,7 @@ import { AuditLogger, maskCode, maskEmail } from "@uber-automation/security";
 import { extractVerificationCode } from "./codeExtractor";
 import { DrizzleEmailAccountRepository } from "./emailAccountRepository.drizzle";
 import { ImapEmailClient } from "./imapEmailClient";
+import { resolveImapOptions } from "./imapProviderConfig";
 import type { EmailAccountRepository } from "./emailAccountRepository";
 import type {
   FindVerificationCodeContext,
@@ -22,8 +23,14 @@ export interface BrowserProfileHooks {
   lockOnSecurityChallenge(applicantId: string, reason: string): Promise<void>;
 }
 
+export interface EmailClientFactoryContext {
+  provider: string;
+  emailAddress: string;
+}
+
 export interface EmailVerificationWorkerOptions {
-  gmailClientFactory?: () => IGmailClient;
+  /** Recebe o provider da conta para escolher host IMAP (gmail, spacemail, etc). */
+  gmailClientFactory?: (context: EmailClientFactoryContext) => IGmailClient;
   emailAccountRepository?: EmailAccountRepository;
   vault?: CredentialVault;
   auditLogger?: AuditLogger;
@@ -51,7 +58,7 @@ const SEARCH_WINDOW_MAX_RESULTS = 20;
  * responsavel por usa-lo imediatamente e nao grava-lo no banco.
  */
 export class EmailVerificationWorker implements IEmailVerificationWorker {
-  private readonly gmailClientFactory: () => IGmailClient;
+  private readonly gmailClientFactory: (context: EmailClientFactoryContext) => IGmailClient;
   private readonly emailAccountRepository: EmailAccountRepository;
   private readonly vault: CredentialVault;
   private readonly auditLogger: AuditLogger;
@@ -67,11 +74,12 @@ export class EmailVerificationWorker implements IEmailVerificationWorker {
 
   constructor(options: EmailVerificationWorkerOptions = {}) {
     // IMAP (não a antiga automação via navegador/PlaywrightGmailClient) é o
-    // padrão desde que confirmamos, contra uma conta real, que o Google
-    // bloqueia o login automatizado pela tela ("Couldn't sign you in") mas
-    // aceita IMAP normalmente com a mesma senha - PlaywrightGmailClient
-    // continua disponível/exportado, só não é mais o default.
-    this.gmailClientFactory = options.gmailClientFactory ?? (() => new ImapEmailClient());
+    // padrão. Host/porta vêm do `provider` da conta (gmail, spacemail, etc) -
+    // ver imapProviderConfig.ts. PlaywrightGmailClient continua exportado,
+    // só não é mais o default.
+    this.gmailClientFactory =
+      options.gmailClientFactory ??
+      (({ provider }) => new ImapEmailClient(resolveImapOptions(provider)));
     this.emailAccountRepository =
       options.emailAccountRepository ?? new DrizzleEmailAccountRepository();
     this.auditLogger = options.auditLogger ?? new AuditLogger();
@@ -122,7 +130,10 @@ export class EmailVerificationWorker implements IEmailVerificationWorker {
       ? await this.browserProfileHooks.loadGmailSession(context.applicantId)
       : undefined;
 
-    const client = this.gmailClientFactory();
+    const client = this.gmailClientFactory({
+      provider: account.provider,
+      emailAddress: account.emailAddress,
+    });
 
     try {
       await client.login(account.emailAddress, password, { proxy, session });
@@ -150,6 +161,7 @@ export class EmailVerificationWorker implements IEmailVerificationWorker {
         metadata: {
           emailAccountId: context.emailAccountId,
           email: maskEmail(account.emailAddress),
+          provider: account.provider,
         },
       });
 

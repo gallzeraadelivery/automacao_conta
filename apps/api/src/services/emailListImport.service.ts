@@ -109,7 +109,9 @@ export interface EmailListImportOutcome {
 export async function importEmailList(
   companyId: string,
   text: string,
+  options: { provider?: string } = {},
 ): Promise<EmailListImportOutcome> {
+  const provider = (options.provider ?? "gmail").trim().toLowerCase() || "gmail";
   const check = await checkEmailListImport(companyId, text);
 
   if (check.validRows.length === 0) {
@@ -140,7 +142,7 @@ export async function importEmailList(
       encryptedPassword: sealed.ciphertext,
       encryptionIv: sealed.iv,
       encryptionAuthTag: sealed.authTag,
-      provider: "gmail",
+      provider,
     });
 
     imported += 1;

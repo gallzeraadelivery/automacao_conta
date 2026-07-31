@@ -13,7 +13,7 @@ export default function EmailsImportPage() {
           "applicant_external_id",
           "email_address",
           "password",
-          "provider (opcional)",
+          "provider (opcional: gmail, spacemail, outlook, yahoo)",
         ]}
       />
     </div>
