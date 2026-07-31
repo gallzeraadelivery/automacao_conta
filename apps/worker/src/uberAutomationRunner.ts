@@ -112,13 +112,22 @@ export function createUberAutomationRunner(
 
     try {
       const context = await browser.newContext({
-        proxy: proxyConnection
-          ? {
-              server: proxyConnection.server,
-              username: proxyConnection.username,
-              password: proxyConnection.password,
-            }
-          : undefined,
+        // Só aplica o proxy em modo "production" (Uber real). Em modo "mock"
+        // o alvo é `mock-server:3001`, um hostname interno da rede Docker -
+        // um proxy externo nunca vai conseguir resolvê-lo/alcançá-lo, então
+        // aplicar o proxy aqui só faz a navegação falhar sempre (page.goto
+        // "sucede" numa página de erro do proxy, e o passo seguinte trava
+        // esperando um seletor que nunca aparece). Testar o proxy de
+        // verdade é papel do botão "Testar" (Playwright) e da automação
+        // real, não do modo mock.
+        proxy:
+          isProduction && proxyConnection
+            ? {
+                server: proxyConnection.server,
+                username: proxyConnection.username,
+                password: proxyConnection.password,
+              }
+            : undefined,
         // Fluxo real (Uber de produção) foi documentado em inglês - fixa o
         // locale para reduzir o risco de a tela inicial vir em outro idioma
         // dependendo de onde o proxy resolve (ver fillIdentifierStep, que já
