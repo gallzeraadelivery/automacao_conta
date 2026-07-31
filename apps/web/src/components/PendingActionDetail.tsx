@@ -155,9 +155,11 @@ export function PendingActionDetail({ id }: { id: string }) {
         {screenshotState === "loading" && <p className="text-sm text-slate-500">Carregando...</p>}
         {screenshotState === "unavailable" && (
           <p className="text-sm text-slate-500">
-            Nenhuma screenshot disponível para esta pendência - a captura/armazenamento automático
-            de screenshots ainda não está implementado (ver README do painel, "Limitações
-            conhecidas").
+            Esta tela ainda não exibe a screenshot diretamente - mas o worker salva uma imagem
+            automaticamente quando algo pausa ou falha. Veja o caminho do arquivo no final da
+            mensagem de log abaixo (texto "[screenshot: ...]") e abra a pasta{" "}
+            <code className="rounded bg-slate-100 px-1 py-0.5">storage/automation-screenshots</code>{" "}
+            no servidor onde o Docker está rodando.
           </p>
         )}
       </div>
@@ -168,14 +170,24 @@ export function PendingActionDetail({ id }: { id: string }) {
           <p className="text-sm text-slate-500">Nenhum evento registrado ainda.</p>
         ) : (
           <ul className="divide-y divide-slate-100 text-sm">
-            {logs.map((log) => (
-              <li key={log.id} className="flex items-center justify-between gap-4 py-2">
-                <span className="text-slate-700">{log.action}</span>
-                <span className="text-xs text-slate-400">
-                  {new Date(log.createdAt).toLocaleString("pt-BR")}
-                </span>
-              </li>
-            ))}
+            {logs.map((log) => {
+              const detail = log.metadataSanitized?.detail;
+              return (
+                <li key={log.id} className="py-2">
+                  <div className="flex items-center justify-between gap-4">
+                    <span className="text-slate-700">{log.action}</span>
+                    <span className="text-xs text-slate-400">
+                      {new Date(log.createdAt).toLocaleString("pt-BR")}
+                    </span>
+                  </div>
+                  {typeof detail === "string" && detail.trim() !== "" && (
+                    <p className="mt-1 whitespace-pre-wrap break-words rounded bg-slate-50 p-2 text-xs text-slate-600">
+                      {detail}
+                    </p>
+                  )}
+                </li>
+              );
+            })}
           </ul>
         )}
       </div>

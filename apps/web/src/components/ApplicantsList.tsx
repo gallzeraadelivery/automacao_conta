@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { apiRequest } from "@/lib/apiClient";
 import { StartAutomationModal } from "./StartAutomationModal";
 
@@ -28,6 +29,14 @@ const STATUS_STYLES: Record<string, string> = {
  * Pendências) para evitar dois jobs concorrentes para o mesmo motorista.
  */
 const STARTABLE_STATUSES = new Set(["NEW", "CONSENT_PENDING", "READY_TO_START", "FAILED"]);
+
+/**
+ * Status que têm algo relevante para ver em `/dashboard/pending-actions/[id]`
+ * (motivo/erro técnico + logs de auditoria com o detalhe completo) - a
+ * página funciona para qualquer status, mas só faz sentido linkar aqui
+ * quando algo pode ter dado errado.
+ */
+const LOGGABLE_STATUSES = new Set(["FAILED", "AWAITING_HUMAN_ACTION"]);
 
 export function ApplicantsList() {
   const [applicants, setApplicants] = useState<ApplicantRow[]>([]);
@@ -87,7 +96,15 @@ export function ApplicantsList() {
                     {applicant.status}
                   </span>
                 </td>
-                <td className="py-2 text-right">
+                <td className="py-2 text-right space-x-2">
+                  {LOGGABLE_STATUSES.has(applicant.status) && (
+                    <Link
+                      href={`/dashboard/pending-actions/${applicant.id}`}
+                      className="rounded-md border border-slate-300 px-3 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50"
+                    >
+                      Ver log/erro
+                    </Link>
+                  )}
                   {STARTABLE_STATUSES.has(applicant.status) && (
                     <button
                       onClick={() => setSelected(applicant)}

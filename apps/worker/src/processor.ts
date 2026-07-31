@@ -192,7 +192,17 @@ async function handleJobError(
       companyId: data.companyId,
       applicantId: data.applicantId,
       action: "automation_job_paused",
-      metadata: { step: data.currentStep, reason, retryable: false },
+      // `detail` carrega a mensagem tecnica completa (erro real do
+      // Playwright/adaptador + "[screenshot: <caminho>]" quando capturado -
+      // ver handleResult em uberAutomationRunner.ts). Sem isso, so o codigo
+      // curto da `reason` ficava visivel, e o operador nao tinha como saber
+      // o que de fato aconteceu nem onde estava a screenshot de diagnostico.
+      metadata: {
+        step: data.currentStep,
+        reason,
+        retryable: false,
+        detail: error instanceof Error ? error.message : undefined,
+      },
     });
 
     if (deps.applicantStatusRepository) {
@@ -213,7 +223,14 @@ async function handleJobError(
     companyId: data.companyId,
     applicantId: data.applicantId,
     action: exhausted ? "automation_job_failed_final" : "automation_job_attempt_failed",
-    metadata: { step: data.currentStep, reason, retryable: true, attempt, maxAttempts },
+    metadata: {
+      step: data.currentStep,
+      reason,
+      retryable: true,
+      attempt,
+      maxAttempts,
+      detail: error instanceof Error ? error.message : String(error),
+    },
   });
 
   // Sem isso, um erro tecnico (ex: seletor errado, ainda nao validado
