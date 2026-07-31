@@ -1,5 +1,5 @@
 import { and, eq } from "drizzle-orm";
-import { db, proxyConfigs } from "@uber-automation/database";
+import { db, proxyConfigs, browserProfiles } from "@uber-automation/database";
 import type { CredentialVault } from "@uber-automation/credential-vault";
 import { testProxyConnectivity } from "@uber-automation/proxy-manager";
 import type { CreateProxyInput } from "@uber-automation/shared";
@@ -112,6 +112,33 @@ export async function createProxy(
 export async function listProxies(companyId: string): Promise<ProxyPublicView[]> {
   const rows = await db.select().from(proxyConfigs).where(eq(proxyConfigs.companyId, companyId));
   return rows.map(toPublicView);
+}
+
+/**
+ * `browser_profiles.proxy_id` referencia `proxy_configs.id` sem
+ * `onDelete: "cascade"` (perfil de navegador é histórico/auditoria, não
+ * deve sumir só porque o proxy foi removido) - por isso, antes de apagar,
+ * desvincula (SET NULL, coluna já é nullable) qualquer perfil que
+ * referencie este proxy, em vez de deixar a constraint de FK falhar com um
+ * erro cru de Postgres.
+ */
+export async function deleteProxy(companyId: string, proxyId: string): Promise<void> {
+  const [row] = await db
+    .select({ id: proxyConfigs.id })
+    .from(proxyConfigs)
+    .where(and(eq(proxyConfigs.companyId, companyId), eq(proxyConfigs.id, proxyId)))
+    .limit(1);
+
+  if (!row) {
+    throw new HttpError(404, "NOT_FOUND", "Proxy não encontrado");
+  }
+
+  await db
+    .update(browserProfiles)
+    .set({ proxyId: null })
+    .where(eq(browserProfiles.proxyId, proxyId));
+
+  await db.delete(proxyConfigs).where(eq(proxyConfigs.id, proxyId));
 }
 
 export async function testProxy(companyId: string, proxyId: string): Promise<ProxyPublicView> {

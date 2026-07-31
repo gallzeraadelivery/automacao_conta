@@ -2,7 +2,7 @@ import { Router } from "express";
 import { createProxySchema } from "@uber-automation/shared";
 import { authenticate, requireRole } from "../middleware/auth";
 import { HttpError } from "../middleware/errorHandler";
-import { createProxy, listProxies, testProxy } from "../services/proxies.service";
+import { createProxy, listProxies, testProxy, deleteProxy } from "../services/proxies.service";
 import { logAudit } from "../services/auditLog.service";
 
 export const proxiesRouter = Router();
@@ -52,6 +52,27 @@ proxiesRouter.post("/:id/test", requireRole("admin", "operator"), async (req, re
     });
 
     return res.json({ success: true, data: proxy });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+proxiesRouter.delete("/:id", requireRole("admin", "operator"), async (req, res, next) => {
+  try {
+    const proxyId = req.params.id;
+    if (!proxyId) {
+      throw new HttpError(400, "MISSING_ID", "Parâmetro id é obrigatório");
+    }
+    await deleteProxy(req.user!.companyId, proxyId);
+
+    await logAudit({
+      companyId: req.user!.companyId,
+      operatorId: req.user!.operatorId,
+      action: "delete_proxy",
+      metadata: { proxyId },
+    });
+
+    return res.json({ success: true, data: { id: proxyId } });
   } catch (error) {
     return next(error);
   }

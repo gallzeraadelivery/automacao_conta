@@ -431,6 +431,18 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
 
+  /api/proxies/{id}:
+    delete:
+      tags: [proxies]
+      summary: Remove um proxy (desvincula perfis de navegador que o referenciam, não os apaga)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: Proxy removido }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { description: Proxy não encontrado }
+
   /api/dashboard/stats:
     get:
       tags: [dashboard]

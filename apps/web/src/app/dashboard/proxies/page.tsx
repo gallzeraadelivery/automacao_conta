@@ -21,18 +21,89 @@ const STATUS_STYLES: Record<string, string> = {
   UNTESTED: "bg-amber-100 text-amber-800",
 };
 
+/**
+ * Preenche os campos individuais a partir de uma string colada, nos formatos
+ * mais comuns de provedores de proxy - nunca envia nada sozinho, só
+ * pré-preenche o formulário pra revisão antes de "Adicionar proxy":
+ * - "protocolo://usuario:senha@host:porta" ou "protocolo://host:porta"
+ * - "host:porta:usuario:senha" (formato clássico de revenda de proxy)
+ * - "usuario:senha@host:porta"
+ * - "host:porta"
+ */
+function parseProxyString(input: string): {
+  protocol?: "http" | "https" | "socks5";
+  host?: string;
+  port?: string;
+  username?: string;
+  password?: string;
+} | null {
+  const trimmed = input.trim();
+  if (!trimmed) return null;
+
+  const withProtocol = trimmed.match(
+    /^(https?|socks5):\/\/(?:([^:@\s]+):([^@\s]+)@)?([^:/\s]+):(\d+)\/?$/i,
+  );
+  if (withProtocol) {
+    const [, protocol, username, password, host, port] = withProtocol;
+    return {
+      protocol: protocol!.toLowerCase() as "http" | "https" | "socks5",
+      host,
+      port,
+      username,
+      password,
+    };
+  }
+
+  const userAtHost = trimmed.match(/^([^:@\s]+):([^@\s]+)@([^:\s]+):(\d+)$/);
+  if (userAtHost) {
+    const [, username, password, host, port] = userAtHost;
+    return { host, port, username, password };
+  }
+
+  const parts = trimmed.split(":");
+  if (parts.length === 4) {
+    const [host, port, username, password] = parts;
+    return { host, port, username, password };
+  }
+  if (parts.length === 2) {
+    const [host, port] = parts;
+    return { host, port };
+  }
+
+  return null;
+}
+
 export default function ProxiesPage() {
   const [proxies, setProxies] = useState<Proxy[]>([]);
   const [loading, setLoading] = useState(false);
   const [testingId, setTestingId] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  const [quickPaste, setQuickPaste] = useState("");
+  const [quickPasteError, setQuickPasteError] = useState<string | null>(null);
   const [host, setHost] = useState("");
   const [port, setPort] = useState("8080");
   const [protocol, setProtocol] = useState<"http" | "https" | "socks5">("http");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [declaredRegion, setDeclaredRegion] = useState("");
+
+  function handleQuickFill() {
+    const parsed = parseProxyString(quickPaste);
+    if (!parsed || !parsed.host || !parsed.port) {
+      setQuickPasteError(
+        'Não reconheci esse formato. Tente "host:porta:usuario:senha" ou "protocolo://usuario:senha@host:porta".',
+      );
+      return;
+    }
+    setQuickPasteError(null);
+    setHost(parsed.host);
+    setPort(parsed.port);
+    if (parsed.protocol) setProtocol(parsed.protocol);
+    if (parsed.username) setUsername(parsed.username);
+    if (parsed.password) setPassword(parsed.password);
+  }
 
   async function loadProxies() {
     setLoading(true);
@@ -87,6 +158,18 @@ export default function ProxiesPage() {
     }
   }
 
+  async function handleDelete(id: string) {
+    if (!window.confirm("Apagar este proxy? Essa ação não pode ser desfeita.")) return;
+    setDeletingId(id);
+    const result = await apiRequest<{ id: string }>(`/api/proxies/${id}`, { method: "DELETE" });
+    setDeletingId(null);
+    if (result.success) {
+      setProxies((prev) => prev.filter((p) => p.id !== id));
+    } else {
+      setError(result.error.message);
+    }
+  }
+
   return (
     <div className="space-y-6">
       <div>
@@ -95,6 +178,32 @@ export default function ProxiesPage() {
           Cadastre e teste a conectividade dos proxies usados na automação. Host e credenciais são
           criptografados e nunca exibidos após o cadastro.
         </p>
+      </div>
+
+      <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+        <label className="text-sm font-medium text-slate-700">
+          Colar dados do proxy (preenche o formulário abaixo automaticamente)
+        </label>
+        <p className="mt-1 text-xs text-slate-500">
+          Aceita os formatos mais comuns: <code>host:porta:usuario:senha</code>,{" "}
+          <code>protocolo://usuario:senha@host:porta</code> ou <code>host:porta</code>.
+        </p>
+        <div className="mt-2 flex gap-2">
+          <input
+            placeholder="ex: geo.provedor.com:12321:usuario123:senha456"
+            value={quickPaste}
+            onChange={(e) => setQuickPaste(e.target.value)}
+            className="flex-1 rounded-md border border-slate-300 px-3 py-2 text-sm"
+          />
+          <button
+            type="button"
+            onClick={handleQuickFill}
+            className="rounded-md border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100"
+          >
+            Preencher
+          </button>
+        </div>
+        {quickPasteError && <p className="mt-2 text-sm text-red-600">{quickPasteError}</p>}
       </div>
 
       <form
@@ -201,13 +310,22 @@ export default function ProxiesPage() {
                     : "-"}
                 </td>
                 <td className="px-4 py-2 text-right">
-                  <button
-                    onClick={() => handleTest(proxy.id)}
-                    disabled={testingId === proxy.id}
-                    className="rounded-md border border-slate-300 px-3 py-1 text-xs font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-50"
-                  >
-                    {testingId === proxy.id ? "Testando..." : "Testar"}
-                  </button>
+                  <div className="flex justify-end gap-2">
+                    <button
+                      onClick={() => handleTest(proxy.id)}
+                      disabled={testingId === proxy.id}
+                      className="rounded-md border border-slate-300 px-3 py-1 text-xs font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-50"
+                    >
+                      {testingId === proxy.id ? "Testando..." : "Testar"}
+                    </button>
+                    <button
+                      onClick={() => handleDelete(proxy.id)}
+                      disabled={deletingId === proxy.id}
+                      className="rounded-md border border-red-300 px-3 py-1 text-xs font-medium text-red-700 hover:bg-red-50 disabled:opacity-50"
+                    >
+                      {deletingId === proxy.id ? "Apagando..." : "Apagar"}
+                    </button>
+                  </div>
                 </td>
               </tr>
             ))}
