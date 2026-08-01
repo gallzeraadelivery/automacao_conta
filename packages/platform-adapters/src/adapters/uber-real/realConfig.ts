@@ -21,6 +21,13 @@ export interface RealUberConfig {
     pageLoad: number;
     elementWait: number;
     actionDelay: number;
+    /**
+     * Quanto tempo o passo do código OTP espera o e-mail chegar via IMAP
+     * (polling). A Uber costuma atrasar alguns segundos; sem isso a busca
+     * única falha mesmo com o e-mail já a caminho.
+     */
+    emailCodePollTimeoutMs: number;
+    emailCodePollIntervalMs: number;
   };
   /** Sufixo fixo da senha gerada - ver `buildPlaceholderPassword` em nameUtils.ts. */
   passwordSuffix: string;
@@ -37,6 +44,8 @@ export const REAL_UBER_CONFIG: RealUberConfig = {
     pageLoad: 30000,
     elementWait: 15000,
     actionDelay: 500,
+    emailCodePollTimeoutMs: 90_000,
+    emailCodePollIntervalMs: 3_000,
   },
   passwordSuffix: "@2026",
   genderOptionLabel: "Man",

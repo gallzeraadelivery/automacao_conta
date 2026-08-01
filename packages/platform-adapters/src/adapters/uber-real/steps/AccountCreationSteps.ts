@@ -37,6 +37,11 @@ export async function fillIdentifierStep(ctx: RealStepContext): Promise<void> {
     await emailInput.waitFor({ state: "visible", timeout: config.timeouts.elementWait });
     await emailInput.fill(context.applicantData.email);
 
+    // Marca o início da janela IMAP ANTES do clique - o e-mail da Uber pode
+    // chegar quase junto do submit. Buffer de 30s cobre skew de relógio do
+    // Spacemail/IMAP vs o worker.
+    ctx.emailCodeRequestedAt = new Date(Date.now() - 30_000);
+
     const continueButton = page.getByRole("button", { name: /^(continuar|continue)$/i }).first();
     await continueButton.click({ timeout: config.timeouts.elementWait });
     await page.waitForLoadState("domcontentloaded", { timeout: config.timeouts.pageLoad });
@@ -59,12 +64,15 @@ export async function fillEmailCodeStep(ctx: RealStepContext): Promise<void> {
 
   let code: string;
   try {
+    const requestedAt = ctx.emailCodeRequestedAt ?? new Date(Date.now() - 60_000);
     const result = await emailWorker.findVerificationCode({
       applicantId: context.applicantId,
       emailAccountId: context.emailAccountId,
       proxyId: context.proxyId,
-      requestedAt: new Date(),
+      requestedAt,
       expectedSender: "noreply@uber.com",
+      pollTimeoutMs: config.timeouts.emailCodePollTimeoutMs,
+      pollIntervalMs: config.timeouts.emailCodePollIntervalMs,
     });
     code = result.code;
   } catch (error) {

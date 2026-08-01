@@ -44,9 +44,23 @@ export interface EmailVerificationWorkerOptions {
    * (ver captureDebugScreenshot em apps/worker/src/uberAutomationRunner.ts).
    */
   captureDebugScreenshot?: (applicantId: string, buffer: Buffer) => Promise<string | undefined>;
+  /**
+   * Quanto tempo total esperar o e-mail da Uber chegar no IMAP antes de
+   * desistir (polling). O e-mail costuma atrasar alguns segundos; sem
+   * isso a 1ª busca falha e as retentativas da fila ainda descartam o
+   * código se regenerarem `requestedAt`.
+   */
+  pollTimeoutMs?: number;
+  pollIntervalMs?: number;
 }
 
 const SEARCH_WINDOW_MAX_RESULTS = 20;
+const DEFAULT_POLL_TIMEOUT_MS = 90_000;
+const DEFAULT_POLL_INTERVAL_MS = 3_000;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 /**
  * Acessa o Gmail do motorista para recuperar o codigo de confirmacao
@@ -71,6 +85,8 @@ export class EmailVerificationWorker implements IEmailVerificationWorker {
     applicantId: string,
     buffer: Buffer,
   ) => Promise<string | undefined>;
+  private readonly pollTimeoutMs: number;
+  private readonly pollIntervalMs: number;
 
   constructor(options: EmailVerificationWorkerOptions = {}) {
     // IMAP (não a antiga automação via navegador/PlaywrightGmailClient) é o
@@ -90,6 +106,8 @@ export class EmailVerificationWorker implements IEmailVerificationWorker {
     this.browserProfileHooks = options.browserProfileHooks;
     this.resolveProxyConnection = options.resolveProxyConnection;
     this.captureDebugScreenshot = options.captureDebugScreenshot;
+    this.pollTimeoutMs = options.pollTimeoutMs ?? DEFAULT_POLL_TIMEOUT_MS;
+    this.pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
   }
 
   async handleSecurityChallenge(
@@ -165,44 +183,65 @@ export class EmailVerificationWorker implements IEmailVerificationWorker {
         },
       });
 
-      const messages = await client.searchMessages({
-        afterDate: context.requestedAt,
-        maxResults: SEARCH_WINDOW_MAX_RESULTS,
-      });
+      const pollTimeoutMs = context.pollTimeoutMs ?? this.pollTimeoutMs;
+      const pollIntervalMs = context.pollIntervalMs ?? this.pollIntervalMs;
+      const deadline = Date.now() + Math.max(0, pollTimeoutMs);
+      let attempt = 0;
+      let lastMessagesScanned = 0;
 
-      await this.auditLogger.log({
-        companyId: this.companyId ?? "unknown",
-        applicantId: context.applicantId,
-        action: "email_verification_code_requested",
-        metadata: { emailAccountId: context.emailAccountId, messagesScanned: messages.length },
-      });
+      while (true) {
+        attempt += 1;
+        const messages = await client.searchMessages({
+          afterDate: context.requestedAt,
+          maxResults: SEARCH_WINDOW_MAX_RESULTS,
+        });
+        lastMessagesScanned = messages.length;
 
-      const candidate = extractVerificationCode(messages, {
-        requestedAt: context.requestedAt,
-        expectedSender: context.expectedSender,
-      });
+        await this.auditLogger.log({
+          companyId: this.companyId ?? "unknown",
+          applicantId: context.applicantId,
+          action: "email_verification_code_requested",
+          metadata: {
+            emailAccountId: context.emailAccountId,
+            messagesScanned: messages.length,
+            attempt,
+          },
+        });
 
-      if (!candidate) {
-        throw new VerificationCodeNotFoundError();
+        const candidate = extractVerificationCode(messages, {
+          requestedAt: context.requestedAt,
+          expectedSender: context.expectedSender,
+        });
+
+        if (candidate) {
+          await this.auditLogger.log({
+            companyId: this.companyId ?? "unknown",
+            applicantId: context.applicantId,
+            action: "email_verification_code_located",
+            metadata: {
+              emailAccountId: context.emailAccountId,
+              maskedCode: maskCode(candidate.code),
+              confidence: candidate.confidence,
+              attempt,
+            },
+          });
+
+          if (this.browserProfileHooks) {
+            const savedSession = await client.saveSession();
+            await this.browserProfileHooks.saveGmailSession(context.applicantId, savedSession);
+          }
+
+          return { code: candidate.code, confidence: candidate.confidence };
+        }
+
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) break;
+        await sleep(Math.min(pollIntervalMs, remaining));
       }
 
-      await this.auditLogger.log({
-        companyId: this.companyId ?? "unknown",
-        applicantId: context.applicantId,
-        action: "email_verification_code_located",
-        metadata: {
-          emailAccountId: context.emailAccountId,
-          maskedCode: maskCode(candidate.code),
-          confidence: candidate.confidence,
-        },
-      });
-
-      if (this.browserProfileHooks) {
-        const savedSession = await client.saveSession();
-        await this.browserProfileHooks.saveGmailSession(context.applicantId, savedSession);
-      }
-
-      return { code: candidate.code, confidence: candidate.confidence };
+      throw new VerificationCodeNotFoundError(
+        `Nenhum código de verificação elegível foi encontrado após ${attempt} tentativa(s) IMAP (${lastMessagesScanned} mensagem(ns) na última varredura)`,
+      );
     } catch (error) {
       if (this.captureDebugScreenshot && client.screenshot) {
         const buffer = await client.screenshot().catch(() => undefined);

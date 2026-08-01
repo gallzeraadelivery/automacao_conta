@@ -46,8 +46,12 @@ export async function runEmailVerificationStep(
       applicantId: context.applicantId,
       emailAccountId: context.emailAccountId,
       proxyId: context.proxyId,
-      requestedAt: new Date(),
+      // Janela com folga: o mock dispara o e-mail no clique; em produção o
+      // adaptador real fixa requestedAt no submit do identifier.
+      requestedAt: new Date(Date.now() - 60_000),
       expectedSender: config.expectedEmailSender,
+      pollTimeoutMs: config.timeouts.emailCodePollTimeoutMs ?? 90_000,
+      pollIntervalMs: config.timeouts.emailCodePollIntervalMs ?? 3_000,
     });
     code = result.code;
   } catch (error) {

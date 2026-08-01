@@ -20,8 +20,18 @@ export interface FindVerificationCodeContext {
   applicantId: string;
   emailAccountId: string;
   proxyId: string;
+  /**
+   * Marca o instante em que o código foi solicitado na Uber (ou pouco
+   * antes). Mensagens anteriores a isso são ignoradas. Deve ser fixo por
+   * tentativa de fluxo - NÃO regenerar a cada retentativa da fila, senão
+   * o e-mail que já chegou é descartado.
+   */
   requestedAt: Date;
   expectedSender?: string;
+  /** Tempo total de polling IMAP aguardando o e-mail chegar. Default no worker. */
+  pollTimeoutMs?: number;
+  /** Intervalo entre buscas IMAP durante o polling. Default no worker. */
+  pollIntervalMs?: number;
 }
 
 export interface VerificationCodeResult {

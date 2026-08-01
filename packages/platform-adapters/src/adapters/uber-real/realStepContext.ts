@@ -17,4 +17,10 @@ export interface RealStepContext {
   config: RealUberConfig;
   emailWorker: IEmailVerificationWorker;
   recordStep(step: string, metadata?: Record<string, unknown>): Promise<void>;
+  /**
+   * Instantâneo em que o e-mail/telefone foi submetido na Uber (início da
+   * janela de elegibilidade do código IMAP). Preenchido por
+   * `fillIdentifierStep` e consumido por `fillEmailCodeStep`.
+   */
+  emailCodeRequestedAt?: Date;
 }

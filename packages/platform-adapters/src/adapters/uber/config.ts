@@ -26,6 +26,9 @@ export interface UberAdapterTimeouts {
   elementWait: number;
   /** Pequena pausa (ms) entre ações, para reduzir a chance de acionar detecção de bot. */
   actionDelay: number;
+  /** Polling IMAP aguardando o e-mail de verificação (opcional; default no worker). */
+  emailCodePollTimeoutMs?: number;
+  emailCodePollIntervalMs?: number;
 }
 
 export interface UberAdapterConfig {

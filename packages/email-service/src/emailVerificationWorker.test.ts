@@ -115,6 +115,7 @@ describe("EmailVerificationWorker", () => {
       vault,
       auditLogger,
       companyId: "company-1",
+      pollTimeoutMs: 0,
     });
 
     const result = await worker.findVerificationCode({
@@ -155,6 +156,7 @@ describe("EmailVerificationWorker", () => {
       emailAccountRepository: repo,
       vault,
       auditLogger,
+      pollTimeoutMs: 0,
       browserProfileHooks: {
         loadGmailSession: async () => undefined,
         saveGmailSession: async () => undefined,
@@ -187,6 +189,7 @@ describe("EmailVerificationWorker", () => {
     async (challenge) => {
       const worker = new EmailVerificationWorker({
         auditLogger: new AuditLogger({ sink: () => {} }),
+        pollTimeoutMs: 0,
       });
       const result = await worker.handleSecurityChallenge(challenge);
       expect(result.status).toBe("PAUSED");
@@ -215,6 +218,7 @@ describe("EmailVerificationWorker", () => {
       emailAccountRepository: repo,
       vault,
       auditLogger,
+      pollTimeoutMs: 0,
     });
 
     await expect(
@@ -225,6 +229,49 @@ describe("EmailVerificationWorker", () => {
         requestedAt: REQUESTED_AT,
       }),
     ).rejects.toThrow(VerificationCodeNotFoundError);
+    expect(client.closed).toBe(true);
+  });
+
+  it("polls IMAP until the verification email arrives", async () => {
+    const auditLogger = new AuditLogger({ sink: () => {} });
+    const vault = buildVault(auditLogger);
+    const encrypted = await encryptedPasswordFor(vault, "pass", "app-1");
+
+    const repo = new FakeEmailAccountRepository({
+      id: "email-1",
+      emailAddress: "driver@gmail.com",
+      encryptedPassword: encrypted.ciphertext,
+      encryptionIv: encrypted.iv,
+      encryptionAuthTag: encrypted.authTag,
+    });
+
+    const client = new MockGmailClient();
+    let searches = 0;
+    client.searchMessages = async () => {
+      searches += 1;
+      if (searches < 3) return [];
+      return [baseMessage()];
+    };
+
+    const worker = new EmailVerificationWorker({
+      gmailClientFactory: () => client,
+      emailAccountRepository: repo,
+      vault,
+      auditLogger,
+      pollTimeoutMs: 5_000,
+      pollIntervalMs: 10,
+    });
+
+    const result = await worker.findVerificationCode({
+      applicantId: "app-1",
+      emailAccountId: "email-1",
+      proxyId: "proxy-1",
+      requestedAt: REQUESTED_AT,
+      expectedSender: "noreply@uber.com",
+    });
+
+    expect(result.code).toBe("482913");
+    expect(searches).toBeGreaterThanOrEqual(3);
     expect(client.closed).toBe(true);
   });
 
@@ -250,6 +297,7 @@ describe("EmailVerificationWorker", () => {
       emailAccountRepository: repo,
       vault,
       auditLogger,
+      pollTimeoutMs: 0,
     });
 
     const result = await worker.findVerificationCode({

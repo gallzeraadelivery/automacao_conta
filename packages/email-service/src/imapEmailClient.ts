@@ -105,10 +105,21 @@ export class ImapEmailClient implements IGmailClient {
         const parsed = await simpleParser(message.source);
         messages.push({
           id: String(message.uid),
-          from: parsed.from?.value[0]?.address ?? "",
+          // address preferencial; se o provedor só mandar display-name
+          // ("Uber"), cai no texto completo pra o filtro de domínio ainda
+          // conseguir casar com uber.com quando o endereço vier no From.
+          from:
+            parsed.from?.value[0]?.address ??
+            parsed.from?.text ??
+            parsed.from?.value[0]?.name ??
+            "",
           subject: parsed.subject ?? "",
           snippet: "",
-          bodyText: parsed.text ?? "",
+          bodyText: parsed.text?.trim()
+            ? parsed.text
+            : typeof parsed.html === "string"
+              ? parsed.html.replace(/<[^>]+>/g, " ")
+              : "",
           receivedAt: parsed.date ?? new Date(),
         });
       }
