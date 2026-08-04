@@ -15,6 +15,13 @@
 export interface RealUberConfig {
   /** Portal de cadastro (email/telefone/senha/nome/termos/gênero/localização/serviço). */
   driversBaseUrl: string;
+  /**
+   * Marketing uber.com — fallback se drivers.uber.com não abrir o fluxo
+   * certo: menu Earn → Delivery.
+   */
+  marketingBaseUrl: string;
+  /** Landing direta de Delivery (Earn), usada se o menu Earn falhar. */
+  deliverLandingUrl: string;
   /** Portal de perfil/documentos, após o cadastro administrativo (Passo 12+ do PDF). */
   profileUrl: string;
   timeouts: {
@@ -39,6 +46,8 @@ export interface RealUberConfig {
 
 export const REAL_UBER_CONFIG: RealUberConfig = {
   driversBaseUrl: "https://drivers.uber.com",
+  marketingBaseUrl: "https://www.uber.com/us/en/",
+  deliverLandingUrl: "https://www.uber.com/us/en/deliver/",
   profileUrl: "https://bonjour.uber.com/profile",
   timeouts: {
     pageLoad: 30000,
@@ -48,6 +57,7 @@ export const REAL_UBER_CONFIG: RealUberConfig = {
     emailCodePollIntervalMs: 3_000,
   },
   passwordSuffix: "@2026",
-  genderOptionLabel: "Man",
+  // Placeholder administrativo — "escolher depois" (fluxo real observado).
+  genderOptionLabel: "Prefer to choose later",
   serviceTypeLabel: "Delivery with car",
 };

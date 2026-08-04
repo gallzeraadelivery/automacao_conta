@@ -30,6 +30,12 @@ const GENERIC_CODE_PATTERN = /\b(\d{4,8})\b/;
 export interface CodeFilterCriteria {
   requestedAt: Date;
   expectedSender?: string;
+  /**
+   * E-mail do motorista no signup (ex: gallsuper10@mail2too.com). Em
+   * caixas catch-all, prioriza mensagens que mencionam esse endereço no
+   * corpo/assunto para não pegar OTP de outro alias.
+   */
+  expectedRecipient?: string;
   usedCodes?: Set<string>;
 }
 
@@ -129,6 +135,12 @@ export function extractVerificationCode(
     else if (senderMatch === "domain") score += 2;
     if (hasSubjectMatch) score += 2;
     if (extracted.nearKeyword) score += 1;
+    if (
+      criteria.expectedRecipient &&
+      text.toLowerCase().includes(criteria.expectedRecipient.trim().toLowerCase())
+    ) {
+      score += 5;
+    }
 
     let confidence: CodeConfidence;
     if (score >= 6) confidence = "HIGH";
@@ -146,9 +158,10 @@ export function extractVerificationCode(
 
   if (candidates.length === 0) return null;
 
+  // Empate de score → mensagem MAIS NOVA (código antigo já usado quebra o OTP).
   candidates.sort((a, b) => {
     if (b.score !== a.score) return b.score - a.score;
-    return a.receivedAt.getTime() - b.receivedAt.getTime();
+    return b.receivedAt.getTime() - a.receivedAt.getTime();
   });
 
   const best = candidates[0]!;

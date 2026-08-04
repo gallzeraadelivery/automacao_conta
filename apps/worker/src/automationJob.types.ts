@@ -60,4 +60,9 @@ export const AUTOMATION_STEPS = {
    * retomado no meio por steps externos.
    */
   RUN_ADMINISTRATIVE_FLOW: "RUN_ADMINISTRATIVE_FLOW",
+  /**
+   * Abre Chromium headed com proxy + cookies do perfil para o operador
+   * continuar manualmente (SMS etc.). Não conclui o cadastro sozinho.
+   */
+  OPEN_MANUAL_BROWSER: "OPEN_MANUAL_BROWSER",
 } as const;

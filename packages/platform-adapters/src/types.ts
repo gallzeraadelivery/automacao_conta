@@ -34,6 +34,28 @@ export interface AutomationContext {
    * logada ou persistida.
    */
   platformCredential: EncryptedCredential;
+  /**
+   * Deslocamento legado do placeholder (fallback se o pool não estiver
+   * injetado). A alocação real usa o pool de números livres do worker.
+   */
+  phoneAttemptOffset?: number;
+  /**
+   * Placeholder que passou da etapa de telefone (senha) nesta execução.
+   * Gravado no pool permanente ao chegar no hub/cidade.
+   */
+  assignedPlaceholderPhone?: string;
+  /** Cidade do rodízio Earn escolhida nesta execução. */
+  assignedEarnCity?: string;
+  /**
+   * Já houve `ACCOUNT_CREATED` para este motorista (audit). Não refazer
+   * signup nem limpar cookies — só retomar hub bonjour.
+   */
+  uberAccountCreated?: boolean;
+  /**
+   * Já passou por `SERVICE_TYPE_SUBMITTED` (Delivery). Sem isso, hub
+   * sozinho NÃO conta como conta Earn completa.
+   */
+  uberEarnSetupComplete?: boolean;
 }
 
 /**
@@ -49,7 +71,9 @@ export type AutomationPauseReason =
   | "NON_SOCURE_PROVIDER"
   | "CAPTCHA"
   | "TWO_FACTOR"
-  | "SECURITY_BLOCK";
+  | "SECURITY_BLOCK"
+  /** Uber Internal Server Error / fluxo Delivery quebrado — descartar e-mail, sem retry. */
+  | "REFUSED";
 
 export type VerificationDetectedType =
   "PROFILE_PHOTO" | "DRIVER_LICENSE" | "CAPTCHA" | "TWO_FACTOR" | "SECURITY_BLOCK";
@@ -59,6 +83,12 @@ export interface VerificationDetectedInfo {
   /** Vem diretamente de `ProviderClassification` do verification-detector, ou 'UNKNOWN' para desafios sem provedor (CAPTCHA/2FA/bloqueio). */
   provider: string;
   confidence: string;
+  /** Probe real: provedor da CNH (SOCURE / VERIFF / …). */
+  driverLicenseProvider?: string;
+  driverLicenseConfidence?: string;
+  /** Probe real: provedor da foto de perfil. */
+  profilePhotoProvider?: string;
+  profilePhotoConfidence?: string;
 }
 
 export interface AutomationErrorInfo {
@@ -94,8 +124,12 @@ export class AutomationPauseSignal extends Error {
   readonly pauseReason: AutomationPauseReason;
   readonly verificationDetected?: VerificationDetectedInfo;
 
-  constructor(pauseReason: AutomationPauseReason, verificationDetected?: VerificationDetectedInfo) {
-    super(`Automação pausada: ${pauseReason}`);
+  constructor(
+    pauseReason: AutomationPauseReason,
+    verificationDetected?: VerificationDetectedInfo,
+    detail?: string,
+  ) {
+    super(detail ?? `Automação pausada: ${pauseReason}`);
     this.name = "AutomationPauseSignal";
     this.pauseReason = pauseReason;
     this.verificationDetected = verificationDetected;

@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { apiRequest } from "@/lib/apiClient";
+import { apiDownload, apiRequest } from "@/lib/apiClient";
+import { isLiveProgressStatus, liveStepLabel } from "@/lib/liveProgress";
 import { StartAutomationModal } from "./StartAutomationModal";
 
 interface ApplicantRow {
@@ -11,6 +12,8 @@ interface ApplicantRow {
   fullName: string;
   status: string;
   pauseReason: string | null;
+  currentStep: string | null;
+  updatedAt?: string;
 }
 
 const STATUS_STYLES: Record<string, string> = {
@@ -28,42 +31,140 @@ const STATUS_STYLES: Record<string, string> = {
  * andamento/pausados/concluídos têm seu próprio fluxo (Central de
  * Pendências) para evitar dois jobs concorrentes para o mesmo motorista.
  */
-const STARTABLE_STATUSES = new Set(["NEW", "CONSENT_PENDING", "READY_TO_START", "FAILED"]);
+const STARTABLE_STATUSES = new Set([
+  "NEW",
+  "CONSENT_PENDING",
+  "READY_TO_START",
+  "FAILED",
+  "CANCELLED",
+  "AWAITING_HUMAN_ACTION",
+]);
 
-/**
- * Status que têm algo relevante para ver em `/dashboard/pending-actions/[id]`
- * (motivo/erro técnico + logs de auditoria com o detalhe completo) - a
- * página funciona para qualquer status, mas só faz sentido linkar aqui
- * quando algo pode ter dado errado.
- */
-const LOGGABLE_STATUSES = new Set(["FAILED", "AWAITING_HUMAN_ACTION"]);
+/** Status com página de log útil (inclui IN_PROGRESS para acompanhar ao vivo). */
+const LOGGABLE_STATUSES = new Set(["FAILED", "AWAITING_HUMAN_ACTION", "IN_PROGRESS"]);
+
+const LIVE_POLL_MS = 3_000;
 
 export function ApplicantsList() {
   const [applicants, setApplicants] = useState<ApplicantRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [selected, setSelected] = useState<ApplicantRow | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [downloadingId, setDownloadingId] = useState<string | null>(null);
+  const [openingBrowserId, setOpeningBrowserId] = useState<string | null>(null);
+  const [closingBrowserId, setClosingBrowserId] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [livePolling, setLivePolling] = useState(false);
 
-  async function load() {
-    setLoading(true);
-    const result = await apiRequest<{ items: ApplicantRow[] }>(
-      "/api/applicants?pageSize=50",
-    );
-    setLoading(false);
-    if (result.success) setApplicants(result.data.items);
-  }
+  const load = useCallback(async (opts?: { silent?: boolean }) => {
+    if (!opts?.silent) setLoading(true);
+    const result = await apiRequest<{ items: ApplicantRow[] }>("/api/applicants?pageSize=50");
+    if (!opts?.silent) setLoading(false);
+    if (result.success) {
+      setApplicants(result.data.items);
+      setLivePolling(result.data.items.some((a) => isLiveProgressStatus(a.status)));
+    }
+  }, []);
 
   useEffect(() => {
     load();
-  }, []);
+  }, [load]);
+
+  useEffect(() => {
+    if (!livePolling) return;
+    const id = window.setInterval(() => {
+      void load({ silent: true });
+    }, LIVE_POLL_MS);
+    return () => window.clearInterval(id);
+  }, [livePolling, load]);
+
+  async function handleDelete(applicant: ApplicantRow) {
+    if (
+      !window.confirm(
+        `Apagar o motorista "${applicant.fullName}"?\n\nIsso remove e-mail, perfil de navegador, cookies e screenshots. Não pode ser desfeito.`,
+      )
+    ) {
+      return;
+    }
+    setActionError(null);
+    setDeletingId(applicant.id);
+    const result = await apiRequest<{ id: string }>(`/api/applicants/${applicant.id}`, {
+      method: "DELETE",
+    });
+    setDeletingId(null);
+    if (result.success) {
+      setApplicants((prev) => prev.filter((a) => a.id !== applicant.id));
+    } else {
+      setActionError(result.error.message);
+    }
+  }
+
+  async function handleDownloadCookies(applicant: ApplicantRow) {
+    setActionError(null);
+    setDownloadingId(applicant.id);
+    const ok = await apiDownload(
+      `/api/applicants/${applicant.id}/uber-cookies`,
+      `uber-cookies-${applicant.externalId}.json`,
+    );
+    setDownloadingId(null);
+    if (!ok) {
+      setActionError(
+        "Não foi possível baixar cookies (ainda vazios ou sessão não persistida). Rode a automação até criar/pausar a conta.",
+      );
+    }
+  }
+
+  async function handleOpenManualBrowser(applicant: ApplicantRow) {
+    setActionError(null);
+    setOpeningBrowserId(applicant.id);
+    const result = await apiRequest<{ jobId: string; proxyId: string }>(
+      `/api/applicants/${applicant.id}/open-manual-browser`,
+      { method: "POST", body: JSON.stringify({}) },
+    );
+    setOpeningBrowserId(null);
+    if (result.success) {
+      setActionError(null);
+      window.alert(
+        "Browser manual enfileirado. Uma janela Chromium deve abrir no worker. Use «Fechar browser» ou feche a janela quando terminar.",
+      );
+    } else {
+      setActionError(result.error.message);
+    }
+  }
+
+  async function handleCloseManualBrowser(applicant: ApplicantRow) {
+    setActionError(null);
+    setClosingBrowserId(applicant.id);
+    const result = await apiRequest<{ stopSignaled: boolean }>(
+      `/api/applicants/${applicant.id}/close-manual-browser`,
+      { method: "POST", body: JSON.stringify({}) },
+    );
+    setClosingBrowserId(null);
+    if (result.success) {
+      window.alert("Sinal de fechar enviado — o Chromium deve fechar em alguns segundos.");
+    } else {
+      setActionError(result.error.message);
+    }
+  }
 
   return (
     <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
       <div className="mb-3 flex items-center justify-between">
-        <h2 className="text-sm font-semibold text-slate-900">Motoristas importados</h2>
-        <button onClick={load} className="text-xs font-medium text-brand-600 hover:underline">
+        <div>
+          <h2 className="text-sm font-semibold text-slate-900">Motoristas importados</h2>
+          {livePolling && (
+            <p className="mt-0.5 text-xs text-blue-600">Atualizando progresso a cada 3s…</p>
+          )}
+        </div>
+        <button
+          onClick={() => load()}
+          className="text-xs font-medium text-brand-600 hover:underline"
+        >
           Atualizar
         </button>
       </div>
+
+      {actionError && <p className="mb-3 text-sm text-red-600">{actionError}</p>}
 
       {loading && applicants.length === 0 && (
         <p className="text-sm text-slate-500">Carregando...</p>
@@ -79,6 +180,7 @@ export function ApplicantsList() {
               <th className="py-2">ID externo</th>
               <th className="py-2">Nome</th>
               <th className="py-2">Status</th>
+              <th className="py-2">Etapa</th>
               <th className="py-2" />
             </tr>
           </thead>
@@ -96,23 +198,75 @@ export function ApplicantsList() {
                     {applicant.status}
                   </span>
                 </td>
-                <td className="py-2 text-right space-x-2">
+                <td className="py-2 text-xs text-slate-600">
+                  {applicant.status === "IN_PROGRESS" || applicant.currentStep ? (
+                    <span className={applicant.status === "IN_PROGRESS" ? "font-medium text-blue-700" : ""}>
+                      {liveStepLabel(applicant.currentStep)}
+                    </span>
+                  ) : (
+                    <span className="text-slate-400">—</span>
+                  )}
+                </td>
+                <td className="py-2 text-right space-x-2 whitespace-nowrap">
                   {LOGGABLE_STATUSES.has(applicant.status) && (
                     <Link
                       href={`/dashboard/pending-actions/${applicant.id}`}
                       className="rounded-md border border-slate-300 px-3 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50"
                     >
-                      Ver log/erro
+                      {applicant.status === "IN_PROGRESS" ? "Ver progresso" : "Ver log/erro"}
                     </Link>
+                  )}
+                  {applicant.status !== "NEW" && (
+                    <button
+                      type="button"
+                      disabled={downloadingId === applicant.id}
+                      onClick={() => handleDownloadCookies(applicant)}
+                      className="rounded-md border border-slate-300 px-3 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+                    >
+                      {downloadingId === applicant.id ? "Baixando…" : "Baixar cookies"}
+                    </button>
+                  )}
+                  {applicant.status !== "NEW" && (
+                    <>
+                      <button
+                        type="button"
+                        disabled={
+                          openingBrowserId === applicant.id || closingBrowserId === applicant.id
+                        }
+                        onClick={() => handleOpenManualBrowser(applicant)}
+                        className="rounded-md border border-indigo-300 px-3 py-1 text-xs font-medium text-indigo-700 hover:bg-indigo-50 disabled:opacity-50"
+                      >
+                        {openingBrowserId === applicant.id ? "Abrindo…" : "Abrir browser"}
+                      </button>
+                      <button
+                        type="button"
+                        disabled={
+                          openingBrowserId === applicant.id || closingBrowserId === applicant.id
+                        }
+                        onClick={() => handleCloseManualBrowser(applicant)}
+                        className="rounded-md border border-slate-400 px-3 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                      >
+                        {closingBrowserId === applicant.id ? "Fechando…" : "Fechar browser"}
+                      </button>
+                    </>
                   )}
                   {STARTABLE_STATUSES.has(applicant.status) && (
                     <button
+                      type="button"
                       onClick={() => setSelected(applicant)}
                       className="rounded-md border border-brand-500 px-3 py-1 text-xs font-medium text-brand-600 hover:bg-brand-50"
                     >
                       Iniciar automação
                     </button>
                   )}
+                  <button
+                    type="button"
+                    disabled={deletingId === applicant.id}
+                    onClick={() => handleDelete(applicant)}
+                    className="rounded-md border border-red-300 px-3 py-1 text-xs font-medium text-red-600 hover:bg-red-50 disabled:opacity-50"
+                  >
+                    {deletingId === applicant.id ? "Apagando…" : "Excluir"}
+                  </button>
                 </td>
               </tr>
             ))}

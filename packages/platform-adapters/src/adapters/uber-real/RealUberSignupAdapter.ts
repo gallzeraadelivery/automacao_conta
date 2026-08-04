@@ -15,52 +15,91 @@ import {
   openDriversPortal,
 } from "./steps/AccountCreationSteps";
 import {
+  settleAfterAccountCreated,
+  tryResumeHubSession,
+} from "./steps/HubSessionSteps";
+import {
   confirmEarningLocationStep,
-  reachDriverRequirementsStep,
+  ensureDriverDocsViaEarnIfNeeded,
+  finishEarnThenGoToHubOnBackground,
+  hasDriverDocumentEntries,
   selectGenderStep,
-  selectServiceTypeStep,
   skipBackgroundCheckStep,
 } from "./steps/PreferencesSteps";
+import { probeVerificationProvidersStep } from "./steps/VerificationProbeSteps";
 
 export interface RealUberSignupAdapterOptions {
   emailWorker: IEmailVerificationWorker;
   auditLogger?: AuditLogger;
   config?: RealUberConfig;
+  /** Persiste storageState no perfil do worker (golden após conta/hub). */
+  persistSession?: (opts?: { markGolden?: boolean; forceGolden?: boolean }) => Promise<void>;
+  allocatePlaceholderPhone?(): Promise<string>;
+  markPlaceholderPhoneUsed?(phone: string, reason?: string): Promise<void>;
+  allocateEarnCity?(): Promise<string>;
 }
 
 /**
- * Adaptador para o fluxo REAL de cadastro de motorista parceiro
- * (drivers.uber.com -> bonjour.uber.com), baseado em
- * FLUXO_AUTOMACAO_UBER_COM_PRINTS.pdf (prints reais fornecidos pelo
- * usuário). Cobre só a parte 100% administrativa (conta, telefone
- * placeholder, senha, nome, termos, gênero placeholder, localização de
- * ganho, tipo de serviço, pular consentimento de background check) e para
- * SEMPRE ao chegar em "Driver requirements" - nunca clica em "Driver's
- * License" nem "Profile Picture" (isso ativaria captura de
- * câmera/documento na própria página da Uber, proibido pelas regras de
- * segurança obrigatórias deste projeto).
+ * Adaptador real drivers → bonjour.
  *
- * Diferente de `UberDriverApplicationAdapter` (mock, `apps/mock-server`),
- * usado apenas quando `AUTOMATION_TARGET=production` (apps/worker).
- *
- * Fronteira honesta: seletores escritos a partir de screenshots (texto
- * visível), nunca inspecionados no HTML real - a primeira execução real
- * observada de perto é o que efetivamente valida isso. Ver README do pacote.
+ * Se `uberAccountCreated` (audit) ou cookies já abrem o hub: **nunca** refaz
+ * signup (identifier/IMAP) — isso pede SMS no telefone placeholder e queima
+ * a sessão. Só retoma hub / Driver requirements.
  */
 export class RealUberSignupAdapter extends PlatformAdapter {
   private readonly emailWorker: IEmailVerificationWorker;
   private readonly auditLogger: AuditLogger;
   private readonly uberConfig: RealUberConfig;
+  private readonly persistSession?: (opts?: {
+    markGolden?: boolean;
+    forceGolden?: boolean;
+  }) => Promise<void>;
+  private readonly allocatePlaceholderPhone?: () => Promise<string>;
+  private readonly markPlaceholderPhoneUsed?: (phone: string, reason?: string) => Promise<void>;
+  private readonly allocateEarnCity?: () => Promise<string>;
+  private readonly usedEmailCodes = new Set<string>();
 
   constructor(page: Page, options: RealUberSignupAdapterOptions) {
     super(page);
     this.emailWorker = options.emailWorker;
     this.auditLogger = options.auditLogger ?? new AuditLogger();
     this.uberConfig = options.config ?? REAL_UBER_CONFIG;
+    this.persistSession = options.persistSession;
+    this.allocatePlaceholderPhone = options.allocatePlaceholderPhone;
+    this.markPlaceholderPhoneUsed = options.markPlaceholderPhoneUsed;
+    this.allocateEarnCity = options.allocateEarnCity;
   }
 
   protected async executeSteps(): Promise<void> {
     const ctx = this.buildStepContext();
+    const accountCreated = Boolean(this.context.uberAccountCreated);
+
+    // Sempre tenta hub primeiro (cookies injetados no context).
+    if (await tryResumeHubSession(ctx)) {
+      if (this.context.uberEarnSetupComplete) {
+        await this.finishFromHub(ctx);
+        return;
+      }
+      // Conta no hub sem Delivery/Earn completo — não para em Documents ainda.
+      await this.completeEarnThenHub(ctx);
+      return;
+    }
+
+    if (accountCreated) {
+      // Conta existe mas hub não abriu: NÃO refaz signup/IMAP.
+      // Caminho manual: Earn → cidade → Delivery with car → background → profile → probe.
+      await this.auditLogger.log({
+        companyId: this.context.companyId ?? "unknown",
+        applicantId: this.context.applicantId,
+        action: "uber_real_signup_hub_resume_failed",
+        metadata: {
+          reason: "account_created_cookies_did_not_open_hub",
+          next: "earn_city_delivery_profile_probe",
+        },
+      });
+      await this.completeEarnThenHub(ctx);
+      return;
+    }
 
     await openDriversPortal(ctx);
     await fillIdentifierStep(ctx);
@@ -70,11 +109,50 @@ export class RealUberSignupAdapter extends PlatformAdapter {
     await fillNameStep(ctx);
     await acceptTermsStep(ctx);
     await confirmAllSetStep(ctx);
-    await selectGenderStep(ctx);
+    // Conta criada: sai de auth.uber.com / spinner antes de gênero/cidade.
+    await settleAfterAccountCreated(ctx);
+
+    // Fluxo observado: cidade (Earn) → gênero "escolher depois" → background → hub.
+    await selectGenderStep(ctx); // se a Uber mostrar gênero antes da cidade
     await confirmEarningLocationStep(ctx);
-    await selectServiceTypeStep(ctx);
+    await selectGenderStep(ctx); // após cidade (caminho Earn → cidade → gênero)
+    await finishEarnThenGoToHubOnBackground(ctx);
+    await ensureDriverDocsViaEarnIfNeeded(ctx);
+    await probeVerificationProvidersStep(ctx);
+  }
+
+  private async finishFromHub(ctx: RealStepContext): Promise<void> {
     await skipBackgroundCheckStep(ctx);
-    await reachDriverRequirementsStep(ctx);
+    await ensureDriverDocsViaEarnIfNeeded(ctx);
+    await probeVerificationProvidersStep(ctx);
+  }
+
+  /** Hub aberto mas sem Earn completo — Earn→cidade→gênero→background→hub. */
+  private async completeEarnThenHub(ctx: RealStepContext): Promise<void> {
+    // Só pula Earn se a lista Documents já tiver CNH/foto (não só o título).
+    if (await hasDriverDocumentEntries(ctx.page, 4_000)) {
+      await this.auditLogger.log({
+        companyId: this.context.companyId ?? "unknown",
+        applicantId: this.context.applicantId,
+        action: "uber_real_signup_earn_setup_skipped",
+        metadata: { reason: "documents_list_has_license_or_photo" },
+      });
+      await probeVerificationProvidersStep(ctx);
+      return;
+    }
+
+    await this.auditLogger.log({
+      companyId: this.context.companyId ?? "unknown",
+      applicantId: this.context.applicantId,
+      action: "uber_real_signup_earn_setup_required",
+      metadata: { reason: "documents_list_empty_or_missing" },
+    });
+    // Ordem manual: uber.com Earn → cidade → Delivery with car → background → hub.
+    await confirmEarningLocationStep(ctx);
+    await selectGenderStep(ctx);
+    await finishEarnThenGoToHubOnBackground(ctx);
+    await ensureDriverDocsViaEarnIfNeeded(ctx);
+    await probeVerificationProvidersStep(ctx);
   }
 
   private buildStepContext(): RealStepContext {
@@ -84,6 +162,13 @@ export class RealUberSignupAdapter extends PlatformAdapter {
       config: this.uberConfig,
       emailWorker: this.emailWorker,
       recordStep: (step, metadata) => this.recordStep(step, metadata),
+      persistSession: this.persistSession,
+      usedEmailCodes: this.usedEmailCodes,
+      allocatePlaceholderPhone: this.allocatePlaceholderPhone,
+      markPlaceholderPhoneUsed: this.markPlaceholderPhoneUsed,
+      allocateEarnCity: this.allocateEarnCity,
+      assignedPlaceholderPhone: this.context.assignedPlaceholderPhone,
+      assignedEarnCity: this.context.assignedEarnCity,
     };
   }
 

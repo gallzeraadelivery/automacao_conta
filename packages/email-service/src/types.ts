@@ -32,6 +32,8 @@ export interface FindVerificationCodeContext {
   pollTimeoutMs?: number;
   /** Intervalo entre buscas IMAP durante o polling. Default no worker. */
   pollIntervalMs?: number;
+  /** Códigos já tentados/usados nesta sessão — não reutilizar. */
+  usedCodes?: string[];
 }
 
 export interface VerificationCodeResult {

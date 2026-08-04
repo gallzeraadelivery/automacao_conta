@@ -10,6 +10,10 @@ import {
   listApplicants,
   getApplicantById,
   startAutomation,
+  deleteApplicant,
+  getUberCookiesExport,
+  openManualBrowser,
+  closeManualBrowser,
 } from "../services/applicants.service";
 import { validateEmailListImport, importEmailList } from "../services/emailListImport.service";
 import { logAudit } from "../services/auditLog.service";
@@ -136,6 +140,63 @@ applicantsRouter.get("/:id", async (req, res, next) => {
   }
 });
 
+applicantsRouter.delete("/:id", requireRole("admin", "operator"), async (req, res, next) => {
+  try {
+    const applicantId = req.params.id;
+    if (!applicantId) {
+      throw new HttpError(400, "MISSING_ID", "ID do motorista ausente na URL");
+    }
+    await deleteApplicant(req.user!.companyId, applicantId);
+
+    await logAudit({
+      companyId: req.user!.companyId,
+      operatorId: req.user!.operatorId,
+      action: "delete_applicant",
+      metadata: { applicantId },
+    });
+
+    return res.json({ success: true, data: { id: applicantId } });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+/**
+ * Download dos cookies Uber persistidos (JSON Playwright) - para reabrir
+ * a sessão no browser após a conta criada.
+ */
+applicantsRouter.get(
+  "/:id/uber-cookies",
+  requireRole("admin", "operator"),
+  async (req, res, next) => {
+    try {
+      const applicantId = req.params.id;
+      if (!applicantId) {
+        throw new HttpError(400, "MISSING_ID", "ID do motorista ausente na URL");
+      }
+      const exported = await getUberCookiesExport(req.user!.companyId, applicantId);
+
+      await logAudit({
+        companyId: req.user!.companyId,
+        operatorId: req.user!.operatorId,
+        applicantId,
+        action: "download_uber_cookies",
+        metadata: { cookieCount: exported.cookieCount },
+      });
+
+      const safeName = exported.externalId.replace(/[^a-zA-Z0-9._-]/g, "_");
+      res.setHeader("Content-Type", "application/json; charset=utf-8");
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="uber-cookies-${safeName}.json"`,
+      );
+      return res.status(200).send(JSON.stringify(exported, null, 2));
+    } catch (error) {
+      return next(error);
+    }
+  },
+);
+
 const startAutomationSchema = z.object({
   proxyId: z.string().uuid(),
   platformPassword: z.string().min(1, "Informe a senha de login da plataforma"),
@@ -161,6 +222,70 @@ applicantsRouter.post(
       });
 
       return res.status(202).json({ success: true, data: result });
+    } catch (error) {
+      return next(error);
+    }
+  },
+);
+
+const openManualBrowserSchema = z.object({
+  proxyId: z.string().uuid().optional(),
+});
+
+/**
+ * Abre Chromium headed no worker (com proxy + cookies salvos) para o
+ * operador continuar o fluxo manualmente (ex: SMS).
+ */
+applicantsRouter.post(
+  "/:id/open-manual-browser",
+  requireRole("admin", "operator"),
+  async (req, res, next) => {
+    try {
+      const applicantId = req.params.id;
+      if (!applicantId) {
+        throw new HttpError(400, "MISSING_ID", "ID do motorista ausente na URL");
+      }
+      const input = openManualBrowserSchema.parse(req.body ?? {});
+      const result = await openManualBrowser(req.user!.companyId, applicantId, input);
+
+      await logAudit({
+        companyId: req.user!.companyId,
+        operatorId: req.user!.operatorId,
+        applicantId,
+        action: "manual_browser_requested",
+        metadata: { jobId: result.jobId, proxyId: result.proxyId },
+      });
+
+      return res.status(202).json({ success: true, data: result });
+    } catch (error) {
+      return next(error);
+    }
+  },
+);
+
+/**
+ * Fecha o Chromium manual (sinal Redis) e limpa jobs/marcadores.
+ */
+applicantsRouter.post(
+  "/:id/close-manual-browser",
+  requireRole("admin", "operator"),
+  async (req, res, next) => {
+    try {
+      const applicantId = req.params.id;
+      if (!applicantId) {
+        throw new HttpError(400, "MISSING_ID", "ID do motorista ausente na URL");
+      }
+      const result = await closeManualBrowser(req.user!.companyId, applicantId);
+
+      await logAudit({
+        companyId: req.user!.companyId,
+        operatorId: req.user!.operatorId,
+        applicantId,
+        action: "manual_browser_close_requested",
+        metadata: result,
+      });
+
+      return res.json({ success: true, data: result });
     } catch (error) {
       return next(error);
     }

@@ -1,5 +1,5 @@
 import { eq } from "drizzle-orm";
-import { db, applicants } from "@uber-automation/database";
+import { db, applicants, emailAccounts } from "@uber-automation/database";
 import type { ApplicantStatusRepository } from "./processor";
 
 /**
@@ -11,7 +11,16 @@ import type { ApplicantStatusRepository } from "./processor";
  * ou dado sensível.
  */
 export class DrizzleApplicantStatusRepository implements ApplicantStatusRepository {
-  async markAwaitingHumanAction(applicantId: string, reason: string): Promise<void> {
+  async markAwaitingHumanAction(
+    applicantId: string,
+    reason: string,
+    providers?: {
+      profilePhotoProvider?: string;
+      profilePhotoConfidence?: string;
+      driverLicenseProvider?: string;
+      driverLicenseConfidence?: string;
+    },
+  ): Promise<void> {
     await db
       .update(applicants)
       .set({
@@ -19,6 +28,18 @@ export class DrizzleApplicantStatusRepository implements ApplicantStatusReposito
         pauseReason: reason,
         pausedAt: new Date(),
         updatedAt: new Date(),
+        ...(providers?.profilePhotoProvider
+          ? {
+              profilePhotoProvider: providers.profilePhotoProvider,
+              profilePhotoConfidence: providers.profilePhotoConfidence ?? null,
+            }
+          : {}),
+        ...(providers?.driverLicenseProvider
+          ? {
+              driverLicenseProvider: providers.driverLicenseProvider,
+              driverLicenseConfidence: providers.driverLicenseConfidence ?? null,
+            }
+          : {}),
       })
       .where(eq(applicants.id, applicantId));
   }
@@ -61,5 +82,21 @@ export class DrizzleApplicantStatusRepository implements ApplicantStatusReposito
         updatedAt: new Date(),
       })
       .where(eq(applicants.id, applicantId));
+  }
+
+  /**
+   * Uber Internal Server Error / fluxo Delivery quebrado: FAILED + soft-delete
+   * do e-mail para não reutilizar a conta queimada.
+   */
+  async markDiscarded(applicantId: string, emailAccountId: string, reason: string): Promise<void> {
+    await this.markFailed(applicantId, reason);
+    await db
+      .update(emailAccounts)
+      .set({
+        deletedAt: new Date(),
+        requiresHumanAction: false,
+        updatedAt: new Date(),
+      })
+      .where(eq(emailAccounts.id, emailAccountId));
   }
 }

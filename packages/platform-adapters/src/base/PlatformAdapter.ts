@@ -46,6 +46,7 @@ export abstract class PlatformAdapter implements IPlatformAdapter {
           currentStep: this.currentStep,
           pauseReason: error.pauseReason,
           verificationDetected: error.verificationDetected,
+          error: { code: error.pauseReason, message: error.message },
         };
       }
 

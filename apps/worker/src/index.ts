@@ -1,5 +1,7 @@
 import { Worker } from "bullmq";
 import IORedis from "ioredis";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { AuditLogger } from "@uber-automation/security";
 import { createDatabaseAuditLogSink } from "@uber-automation/database";
 import { BrowserProfileManager } from "@uber-automation/automation";
@@ -10,6 +12,7 @@ import { ConcurrencyLimiter } from "./concurrencyLimiter";
 import { processAutomationJob, type AutomationJobLike } from "./processor";
 import { DrizzleApplicantStatusRepository } from "./applicantStatusRepository.drizzle";
 import { createUberAutomationRunner } from "./uberAutomationRunner";
+import { createManualBrowserRunner } from "./manualBrowserRunner";
 import { createScopedEmailVerificationWorker } from "./emailVerificationWorkerFactory";
 import type { AutomationJob } from "./automationJob.types";
 
@@ -19,6 +22,7 @@ const auditLogger = new AuditLogger({ sink: createDatabaseAuditLogSink() });
 const limiter = new ConcurrencyLimiter(connection);
 const applicantStatusRepository = new DrizzleApplicantStatusRepository();
 const runAdministrativeFlow = createUberAutomationRunner({ auditLogger });
+const runManualBrowser = createManualBrowserRunner({ auditLogger });
 
 console.log(
   `[worker] AUTOMATION_TARGET=${env.AUTOMATION_TARGET}` +
@@ -36,6 +40,14 @@ const worker = new Worker<AutomationJob>(
     const browserProfileManager = new BrowserProfileManager({
       auditLogger,
       companyId: job.data.companyId,
+      storageRoot:
+        process.env.BROWSER_PROFILES_STORAGE_PATH &&
+        path.isAbsolute(process.env.BROWSER_PROFILES_STORAGE_PATH)
+          ? process.env.BROWSER_PROFILES_STORAGE_PATH
+          : path.resolve(
+              path.dirname(fileURLToPath(import.meta.url)),
+              "../../storage/browser-profiles",
+            ),
     });
     const emailVerificationWorker = createScopedEmailVerificationWorker(
       job.data.companyId,
@@ -49,11 +61,17 @@ const worker = new Worker<AutomationJob>(
       emailVerificationWorker,
       applicantStatusRepository,
       runAdministrativeFlow,
+      runManualBrowser,
     });
   },
   {
     connection,
     concurrency: env.WORKER_CONCURRENCY,
+    // Browser manual fica aberto minutos; lock longo + renovação automática.
+    // maxStalledCount 1: se o worker cair, tenta 1x — o runner ignora
+    // reentrega do mesmo job sem abrir outro Chromium.
+    lockDuration: 120_000,
+    maxStalledCount: 1,
     settings: { backoffStrategy: progressiveBackoffStrategy },
   },
 );

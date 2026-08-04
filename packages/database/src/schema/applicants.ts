@@ -28,6 +28,7 @@ export const PAUSE_REASONS = [
   "CAPTCHA",
   "TWO_FACTOR",
   "SECURITY_BLOCK",
+  "REFUSED",
 ] as const;
 export type PauseReason = (typeof PAUSE_REASONS)[number];
 

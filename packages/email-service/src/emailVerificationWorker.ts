@@ -3,8 +3,12 @@ import { AuditLogger, maskCode, maskEmail } from "@uber-automation/security";
 import { extractVerificationCode } from "./codeExtractor";
 import { DrizzleEmailAccountRepository } from "./emailAccountRepository.drizzle";
 import { ImapEmailClient } from "./imapEmailClient";
+import { resolveCatchallInboxEmail } from "./imapCatchallConfig";
 import { resolveImapOptions } from "./imapProviderConfig";
-import type { EmailAccountRepository } from "./emailAccountRepository";
+import type {
+  EmailAccountCredentialRecord,
+  EmailAccountRepository,
+} from "./emailAccountRepository";
 import type {
   FindVerificationCodeContext,
   GmailSessionData,
@@ -60,6 +64,18 @@ const DEFAULT_POLL_INTERVAL_MS = 3_000;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Erros de socket IMAP que valem reconnect em vez de falha definitiva. */
+function isTransientImapError(error: unknown): boolean {
+  const code =
+    error && typeof error === "object" && "code" in error
+      ? String((error as { code: unknown }).code)
+      : "";
+  const message = error instanceof Error ? error.message : String(error);
+  return /ETIMEDOUT|ECONNRESET|EPIPE|ENETUNREACH|EHOSTUNREACH|socket|not available|Connection closed|Unexpected socket/i.test(
+    `${code} ${message}`,
+  );
 }
 
 /**
@@ -125,20 +141,24 @@ export class EmailVerificationWorker implements IEmailVerificationWorker {
   async findVerificationCode(
     context: FindVerificationCodeContext,
   ): Promise<VerificationCodeResult> {
-    const account = await this.emailAccountRepository.getById(context.emailAccountId);
-    if (!account) {
+    const logicalAccount = await this.emailAccountRepository.getById(context.emailAccountId);
+    if (!logicalAccount) {
       throw new Error("Conta de e-mail não encontrada");
     }
 
+    // Domínios catch-all (ex: @mail2too.com): OTP chega na caixa compartilhada
+    // (galldelivery), não na conta do alias usado no signup da Uber.
+    const imapAccount = await this.resolveImapAccount(logicalAccount);
+
     let password: string | undefined = await this.vault.decrypt(
       {
-        ciphertext: account.encryptedPassword,
-        iv: account.encryptionIv,
-        authTag: account.encryptionAuthTag,
+        ciphertext: imapAccount.encryptedPassword,
+        iv: imapAccount.encryptionIv,
+        authTag: imapAccount.encryptionAuthTag,
         algorithm: "AES-256-GCM",
       },
-      { applicantId: context.applicantId },
-      context.emailAccountId,
+      { applicantId: imapAccount.applicantId },
+      imapAccount.id,
     );
 
     const proxy = this.resolveProxyConnection
@@ -149,19 +169,17 @@ export class EmailVerificationWorker implements IEmailVerificationWorker {
       : undefined;
 
     const client = this.gmailClientFactory({
-      provider: account.provider,
-      emailAddress: account.emailAddress,
+      provider: imapAccount.provider,
+      emailAddress: imapAccount.emailAddress,
     });
 
     try {
-      await client.login(account.emailAddress, password, { proxy, session });
-      // Melhor esforco: nao mantemos a senha em memoria alem do necessario.
-      password = undefined;
+      await client.login(imapAccount.emailAddress, password, { proxy, session });
 
       const challenge = await client.detectSecurityChallenge();
       if (challenge) {
         await this.emailAccountRepository.markRequiresHumanAction(
-          context.emailAccountId,
+          imapAccount.id,
           "REQUIRES_2FA",
         );
         if (this.browserProfileHooks) {
@@ -171,15 +189,18 @@ export class EmailVerificationWorker implements IEmailVerificationWorker {
         throw new SecurityChallengeError(challenge, result.reason);
       }
 
-      await this.emailAccountRepository.recordLoginResult(context.emailAccountId, "VALID");
+      await this.emailAccountRepository.recordLoginResult(imapAccount.id, "VALID");
       await this.auditLogger.log({
-        companyId: this.companyId ?? "unknown",
+        companyId: this.companyId ?? logicalAccount.companyId,
         applicantId: context.applicantId,
         action: "email_login_succeeded",
         metadata: {
           emailAccountId: context.emailAccountId,
-          email: maskEmail(account.emailAddress),
-          provider: account.provider,
+          imapEmailAccountId: imapAccount.id,
+          email: maskEmail(logicalAccount.emailAddress),
+          imapEmail: maskEmail(imapAccount.emailAddress),
+          catchall: imapAccount.id !== logicalAccount.id,
+          provider: imapAccount.provider,
         },
       });
 
@@ -191,18 +212,44 @@ export class EmailVerificationWorker implements IEmailVerificationWorker {
 
       while (true) {
         attempt += 1;
-        const messages = await client.searchMessages({
-          afterDate: context.requestedAt,
-          maxResults: SEARCH_WINDOW_MAX_RESULTS,
-        });
+        let messages;
+        try {
+          messages = await client.searchMessages({
+            afterDate: context.requestedAt,
+            maxResults: SEARCH_WINDOW_MAX_RESULTS,
+          });
+        } catch (error) {
+          // Spacemail às vezes derruba o TLS no meio do poll (ETIMEDOUT).
+          // Reconecta e segue até o deadline em vez de matar o worker.
+          if (!isTransientImapError(error) || Date.now() >= deadline || !password) {
+            throw error;
+          }
+          await this.auditLogger.log({
+            companyId: this.companyId ?? logicalAccount.companyId,
+            applicantId: context.applicantId,
+            action: "email_imap_reconnect",
+            metadata: {
+              emailAccountId: context.emailAccountId,
+              attempt,
+              error: error instanceof Error ? error.message.slice(0, 200) : "unknown",
+            },
+          });
+          await client.close().catch(() => undefined);
+          await client.login(imapAccount.emailAddress, password, { proxy, session });
+          const remainingAfterReconnect = deadline - Date.now();
+          if (remainingAfterReconnect <= 0) break;
+          await sleep(Math.min(pollIntervalMs, remainingAfterReconnect));
+          continue;
+        }
         lastMessagesScanned = messages.length;
 
         await this.auditLogger.log({
-          companyId: this.companyId ?? "unknown",
+          companyId: this.companyId ?? logicalAccount.companyId,
           applicantId: context.applicantId,
           action: "email_verification_code_requested",
           metadata: {
             emailAccountId: context.emailAccountId,
+            imapEmailAccountId: imapAccount.id,
             messagesScanned: messages.length,
             attempt,
           },
@@ -211,15 +258,18 @@ export class EmailVerificationWorker implements IEmailVerificationWorker {
         const candidate = extractVerificationCode(messages, {
           requestedAt: context.requestedAt,
           expectedSender: context.expectedSender,
+          expectedRecipient: logicalAccount.emailAddress,
+          usedCodes: context.usedCodes ? new Set(context.usedCodes) : undefined,
         });
 
         if (candidate) {
           await this.auditLogger.log({
-            companyId: this.companyId ?? "unknown",
+            companyId: this.companyId ?? logicalAccount.companyId,
             applicantId: context.applicantId,
             action: "email_verification_code_located",
             metadata: {
               emailAccountId: context.emailAccountId,
+              imapEmailAccountId: imapAccount.id,
               maskedCode: maskCode(candidate.code),
               confidence: candidate.confidence,
               attempt,
@@ -257,6 +307,28 @@ export class EmailVerificationWorker implements IEmailVerificationWorker {
       password = undefined;
       await client.close();
     }
+  }
+
+  /**
+   * Conta cujas credenciais IMAP devem ser usadas. Em catch-all, aponta
+   * para a caixa compartilhada; senão a própria conta do motorista.
+   */
+  private async resolveImapAccount(
+    logicalAccount: EmailAccountCredentialRecord,
+  ): Promise<EmailAccountCredentialRecord> {
+    const catchallEmail = resolveCatchallInboxEmail(logicalAccount.emailAddress);
+    if (!catchallEmail) return logicalAccount;
+
+    const inbox = await this.emailAccountRepository.getByCompanyAndEmail(
+      logicalAccount.companyId,
+      catchallEmail,
+    );
+    if (!inbox) {
+      throw new Error(
+        `Caixa catch-all IMAP "${catchallEmail}" não cadastrada nesta empresa (necessária para ler OTP de ${logicalAccount.emailAddress})`,
+      );
+    }
+    return inbox;
   }
 }
 

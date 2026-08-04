@@ -8,6 +8,7 @@ import { DeliverToDriverModal } from "./DeliverToDriverModal";
 
 const PROVIDER_LABELS: Record<string, string> = {
   SOCURE: "Socure",
+  VERIFF: "Veriff",
   NOT_SOCURE: "Outro provedor",
   OTHER_PROVIDER: "Outro provedor",
   UNKNOWN: "Desconhecido",

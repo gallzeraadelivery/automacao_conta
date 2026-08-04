@@ -17,11 +17,22 @@ export type NonRetryableReason =
 
 export class NonRetryableAutomationError extends Error {
   readonly reason: NonRetryableReason;
+  readonly providers?: {
+    profilePhotoProvider?: string;
+    profilePhotoConfidence?: string;
+    driverLicenseProvider?: string;
+    driverLicenseConfidence?: string;
+  };
 
-  constructor(reason: NonRetryableReason, message?: string) {
+  constructor(
+    reason: NonRetryableReason,
+    message?: string,
+    providers?: NonRetryableAutomationError["providers"],
+  ) {
     super(message ?? reason);
     this.name = "NonRetryableAutomationError";
     this.reason = reason;
+    this.providers = providers;
   }
 }
 
@@ -30,7 +41,13 @@ export class NonRetryableAutomationError extends Error {
  * progressivo (ate 3 tentativas).
  */
 export type TechnicalReason =
-  "TIMEOUT" | "CONNECTION_FAILURE" | "PAGE_UNAVAILABLE" | "LOAD_ERROR" | "PROXY_UNAVAILABLE";
+  | "TIMEOUT"
+  | "CONNECTION_FAILURE"
+  | "PAGE_UNAVAILABLE"
+  | "LOAD_ERROR"
+  | "PROXY_UNAVAILABLE"
+  | "PHONE_SMS_RETRY"
+  | "EMAIL_CODE_RETRY";
 
 export class TechnicalAutomationError extends Error {
   readonly reason: TechnicalReason;

@@ -36,6 +36,40 @@ function enrichImapError(error: unknown): Error {
 }
 
 /**
+ * Lista UIDs recentes do INBOX sem depender de SEARCH SINCE.
+ * Spacemail (mail.spacemail.com) e outros IMAP pequenos frequentemente
+ * devolvem lista vazia com `{ since: Date }` mesmo com mensagens no dia -
+ * observado em produção (29 polls, 0 mensagens, e-mails Uber visíveis no
+ * webmail). Preferimos:
+ * 1) intervalo de sequência com base em `mailbox.exists`
+ * 2) fallback `search({ all: true })` fatiando o fim
+ * 3) último recurso: tentar SINCE (Gmail costuma respeitar)
+ */
+async function listRecentInboxUids(
+  client: ImapFlow,
+  limit: number,
+  afterDate: Date,
+): Promise<number[]> {
+  const exists = client.mailbox && "exists" in client.mailbox ? Number(client.mailbox.exists) : 0;
+  if (exists > 0) {
+    const start = Math.max(1, exists - limit + 1);
+    const uids: number[] = [];
+    for await (const msg of client.fetch(`${start}:${exists}`, { uid: true })) {
+      if (typeof msg.uid === "number") uids.push(msg.uid);
+    }
+    if (uids.length > 0) return uids.reverse();
+  }
+
+  const allUids = await client.search({ all: true }, { uid: true });
+  if (allUids && allUids.length > 0) {
+    return allUids.slice(-limit).reverse();
+  }
+
+  const sinceUids = await client.search({ since: afterDate }, { uid: true });
+  return (sinceUids || []).slice(-limit).reverse();
+}
+
+/**
  * Lê o código de verificação via IMAP (protocolo oficial de e-mail) em vez
  * de simular a tela de login do Gmail num navegador - evita por completo a
  * detecção de automação do Google ("Couldn't sign you in", ver
@@ -54,6 +88,8 @@ export class ImapEmailClient implements IGmailClient {
   private readonly port: number;
   private readonly connectionTimeout?: number;
   private client?: ImapFlow;
+  /** Último erro de socket emitido pelo ImapFlow (event 'error'). */
+  private socketError?: Error;
 
   constructor(options: ImapEmailClientOptions = {}) {
     this.host = options.host ?? DEFAULT_HOST;
@@ -61,23 +97,54 @@ export class ImapEmailClient implements IGmailClient {
     this.connectionTimeout = options.connectionTimeout;
   }
 
+  /**
+   * Sem listener de 'error', o Node trata ETIMEDOUT/ECONNRESET do TLS como
+   * unhandled e MATA o processo do worker (visto em produção Spacemail).
+   * Aqui engolimos o event, guardamos o erro e falhamos a próxima operação
+   * de forma controlada.
+   */
+  private bindClient(client: ImapFlow): void {
+    this.socketError = undefined;
+    this.client = client;
+    client.on("error", (err: Error) => {
+      this.socketError = enrichImapError(err);
+    });
+  }
+
+  private throwIfSocketDead(): void {
+    if (!this.socketError) return;
+    const err = this.socketError;
+    this.socketError = undefined;
+    this.client = undefined;
+    throw err;
+  }
+
   async login(
     email: string,
     password: string,
     _options: { proxy?: ProxyConnectionOptions; session?: GmailSessionData },
   ): Promise<void> {
-    this.client = new ImapFlow({
+    await this.close().catch(() => undefined);
+
+    const client = new ImapFlow({
       host: this.host,
       port: this.port,
       secure: true,
       auth: { user: email, pass: password },
       logger: false,
-      connectionTimeout: this.connectionTimeout,
-    });
+      connectionTimeout: this.connectionTimeout ?? 20_000,
+      // Idle TLS sem resposta (Spacemail) → erro em vez de hang eterno.
+      socketTimeout: 60_000,
+      greetingTimeout: this.connectionTimeout ?? 20_000,
+    } as ConstructorParameters<typeof ImapFlow>[0]);
+
+    this.bindClient(client);
     try {
-      await this.client.connect();
+      await client.connect();
+      this.throwIfSocketDead();
     } catch (error) {
-      throw enrichImapError(error);
+      this.client = undefined;
+      throw enrichImapError(this.socketError ?? error);
     }
   }
 
@@ -91,18 +158,30 @@ export class ImapEmailClient implements IGmailClient {
     if (!this.client) {
       throw new Error("Cliente IMAP não está autenticado (chame login() primeiro)");
     }
+    this.throwIfSocketDead();
 
     const maxResults = query.maxResults ?? 20;
-    const lock = await this.client.getMailboxLock("INBOX");
+    // Busca um pouco mais que maxResults: o filtro afterDate é no cliente
+    // (Spacemail e alguns IMAP devolvem [] com SEARCH SINCE).
+    const fetchWindow = Math.max(maxResults * 3, 40);
+    let lock: { release(): void } | undefined;
     try {
-      const uids = await this.client.search({ since: query.afterDate }, { uid: true });
-      const recentUids = (uids || []).slice(-maxResults).reverse();
+      lock = await this.client.getMailboxLock("INBOX");
+      this.throwIfSocketDead();
+      const recentUids = await listRecentInboxUids(this.client, fetchWindow, query.afterDate);
+      this.throwIfSocketDead();
       if (recentUids.length === 0) return [];
 
       const messages: GmailMessage[] = [];
       for await (const message of this.client.fetch(recentUids, { source: true }, { uid: true })) {
+        this.throwIfSocketDead();
         if (!message.source) continue;
         const parsed = await simpleParser(message.source);
+        const receivedAt = parsed.date ?? new Date();
+        // Folga de 2 min: skew de Date do servidor vs worker.
+        if (receivedAt.getTime() < query.afterDate.getTime() - 120_000) {
+          continue;
+        }
         messages.push({
           id: String(message.uid),
           // address preferencial; se o provedor só mandar display-name
@@ -120,14 +199,14 @@ export class ImapEmailClient implements IGmailClient {
             : typeof parsed.html === "string"
               ? parsed.html.replace(/<[^>]+>/g, " ")
               : "",
-          receivedAt: parsed.date ?? new Date(),
+          receivedAt,
         });
       }
-      return messages;
+      return messages.slice(0, maxResults);
     } catch (error) {
-      throw enrichImapError(error);
+      throw enrichImapError(this.socketError ?? error);
     } finally {
-      lock.release();
+      lock?.release();
     }
   }
 
@@ -136,7 +215,15 @@ export class ImapEmailClient implements IGmailClient {
   }
 
   async close(): Promise<void> {
-    await this.client?.logout().catch(() => undefined);
+    const client = this.client;
     this.client = undefined;
+    this.socketError = undefined;
+    if (!client) return;
+    await client.logout().catch(() => undefined);
+    try {
+      client.close();
+    } catch {
+      // conexão já morta após ETIMEDOUT
+    }
   }
 }

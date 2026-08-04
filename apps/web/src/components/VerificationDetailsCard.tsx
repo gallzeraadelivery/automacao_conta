@@ -1,5 +1,6 @@
 const PROVIDER_LABELS: Record<string, string> = {
   SOCURE: "Socure",
+  VERIFF: "Veriff",
   NOT_SOCURE: "Outro provedor (não Socure)",
   OTHER_PROVIDER: "Outro provedor (genérico)",
   UBER_INTERNAL: "Uber (interno)",

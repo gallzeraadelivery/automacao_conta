@@ -34,3 +34,12 @@ export {
   type RealUberSignupAdapterOptions,
 } from "./adapters/uber-real/RealUberSignupAdapter";
 export { REAL_UBER_CONFIG, type RealUberConfig } from "./adapters/uber-real/realConfig";
+export {
+  buildPlaceholderPhone,
+  buildPlaceholderPassword,
+  formatUsPhoneFromDigits,
+  nextFreePlaceholderPhoneDigits,
+  toPhoneDigits,
+  resolvePhoneBaseDigits,
+  splitFullName,
+} from "./adapters/uber-real/nameUtils";

@@ -1,9 +1,22 @@
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { db, emailAccounts } from "@uber-automation/database";
 import type {
   EmailAccountCredentialRecord,
   EmailAccountRepository,
 } from "./emailAccountRepository";
+
+function toRecord(row: typeof emailAccounts.$inferSelect): EmailAccountCredentialRecord {
+  return {
+    id: row.id,
+    companyId: row.companyId,
+    applicantId: row.applicantId,
+    emailAddress: row.emailAddress,
+    encryptedPassword: row.encryptedPassword,
+    encryptionIv: row.encryptionIv,
+    encryptionAuthTag: row.encryptionAuthTag,
+    provider: row.provider,
+  };
+}
 
 export class DrizzleEmailAccountRepository implements EmailAccountRepository {
   async getById(emailAccountId: string): Promise<EmailAccountCredentialRecord | null> {
@@ -13,16 +26,25 @@ export class DrizzleEmailAccountRepository implements EmailAccountRepository {
       .where(eq(emailAccounts.id, emailAccountId))
       .limit(1);
 
-    if (!row) return null;
+    return row ? toRecord(row) : null;
+  }
 
-    return {
-      id: row.id,
-      emailAddress: row.emailAddress,
-      encryptedPassword: row.encryptedPassword,
-      encryptionIv: row.encryptionIv,
-      encryptionAuthTag: row.encryptionAuthTag,
-      provider: row.provider,
-    };
+  async getByCompanyAndEmail(
+    companyId: string,
+    emailAddress: string,
+  ): Promise<EmailAccountCredentialRecord | null> {
+    const [row] = await db
+      .select()
+      .from(emailAccounts)
+      .where(
+        and(
+          eq(emailAccounts.companyId, companyId),
+          eq(emailAccounts.emailAddress, emailAddress.trim().toLowerCase()),
+        ),
+      )
+      .limit(1);
+
+    return row ? toRecord(row) : null;
   }
 
   async markRequiresHumanAction(emailAccountId: string, reason: string): Promise<void> {

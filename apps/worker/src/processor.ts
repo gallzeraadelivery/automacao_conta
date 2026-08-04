@@ -36,10 +36,21 @@ export interface AutomationJobLike {
 }
 
 export interface ApplicantStatusRepository {
-  markAwaitingHumanAction(applicantId: string, reason: string): Promise<void>;
+  markAwaitingHumanAction(
+    applicantId: string,
+    reason: string,
+    providers?: {
+      profilePhotoProvider?: string;
+      profilePhotoConfidence?: string;
+      driverLicenseProvider?: string;
+      driverLicenseConfidence?: string;
+    },
+  ): Promise<void>;
   markInProgress?(applicantId: string, currentStep: string): Promise<void>;
   markCompleted?(applicantId: string): Promise<void>;
   markFailed?(applicantId: string, reason: string): Promise<void>;
+  /** REFUSED / Internal Server Error: FAILED + soft-delete do e-mail. */
+  markDiscarded?(applicantId: string, emailAccountId: string, reason: string): Promise<void>;
 }
 
 /**
@@ -54,12 +65,16 @@ export type AdministrativeFlowRunner = (
   emailVerificationWorker: IEmailVerificationWorker,
 ) => Promise<void>;
 
+/** Abre Chromium headed com proxy + cookies - intervenção manual. */
+export type ManualBrowserRunner = (job: AutomationJobLike) => Promise<void>;
+
 export interface ProcessAutomationJobDeps {
   limiter: ConcurrencyLimiter;
   auditLogger: AuditLogger;
   emailVerificationWorker?: IEmailVerificationWorker;
   applicantStatusRepository?: ApplicantStatusRepository;
   runAdministrativeFlow?: AdministrativeFlowRunner;
+  runManualBrowser?: ManualBrowserRunner;
   /** Atraso (ms) ao reagendar um job que esbarrou em limite de concorrência. */
   retryLaterDelayMs?: number;
 }
@@ -126,6 +141,7 @@ export async function processAutomationJob(
       metadata: { step: data.currentStep },
     });
 
+    // Browser manual NÃO marca COMPLETED — só intervenção do operador.
     if (data.currentStep === AUTOMATION_STEPS.RUN_ADMINISTRATIVE_FLOW) {
       await deps.applicantStatusRepository?.markCompleted?.(data.applicantId);
     }
@@ -171,6 +187,17 @@ async function executeStep(job: AutomationJobLike, deps: ProcessAutomationJobDep
     return;
   }
 
+  if (data.currentStep === AUTOMATION_STEPS.OPEN_MANUAL_BROWSER) {
+    if (!deps.runManualBrowser) {
+      throw new TechnicalAutomationError(
+        "PAGE_UNAVAILABLE",
+        "runManualBrowser não configurado",
+      );
+    }
+    await deps.runManualBrowser(job);
+    return;
+  }
+
   throw new TechnicalAutomationError(
     "PAGE_UNAVAILABLE",
     `Etapa "${data.currentStep}" não implementada`,
@@ -187,6 +214,33 @@ async function handleJobError(
   if (error instanceof NonRetryableAutomationError || error instanceof SecurityChallengeError) {
     job.discard();
     const reason = error instanceof NonRetryableAutomationError ? error.reason : error.challenge;
+
+    // Internal Server Error / fluxo Uber quebrado: descarta e-mail, sem
+    // enfileirar na Central de Pendências (não há ação humana útil).
+    if (reason === "REFUSED") {
+      await deps.auditLogger.log({
+        companyId: data.companyId,
+        applicantId: data.applicantId,
+        action: "automation_job_discarded",
+        metadata: {
+          step: data.currentStep,
+          reason,
+          retryable: false,
+          emailAccountId: data.emailAccountId,
+          detail: error instanceof Error ? error.message : undefined,
+        },
+      });
+      if (deps.applicantStatusRepository?.markDiscarded) {
+        await deps.applicantStatusRepository.markDiscarded(
+          data.applicantId,
+          data.emailAccountId,
+          String(reason),
+        );
+      } else {
+        await deps.applicantStatusRepository?.markFailed?.(data.applicantId, String(reason));
+      }
+      return;
+    }
 
     await deps.auditLogger.log({
       companyId: data.companyId,
@@ -209,6 +263,7 @@ async function handleJobError(
       await deps.applicantStatusRepository.markAwaitingHumanAction(
         data.applicantId,
         String(reason),
+        error instanceof NonRetryableAutomationError ? error.providers : undefined,
       );
     }
     return;

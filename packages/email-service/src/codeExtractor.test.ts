@@ -87,6 +87,29 @@ describe("extractVerificationCode", () => {
     expect(result!.code).toBe("482913");
   });
 
+  it("when scores tie, prefers the newer message (not a stale OTP)", () => {
+    const older = message({
+      id: "older",
+      snippet: "Seu código de verificação é 111111. Não compartilhe.",
+      bodyText: "código 111111",
+      receivedAt: new Date("2026-01-01T12:01:00Z"),
+    });
+    const newer = message({
+      id: "newer",
+      snippet: "Seu código de verificação é 222222. Não compartilhe.",
+      bodyText: "código 222222",
+      receivedAt: new Date("2026-01-01T12:05:00Z"),
+    });
+
+    const result = extractVerificationCode([older, newer], {
+      requestedAt: REQUESTED_AT,
+      expectedSender: "noreply@uber.com",
+    });
+
+    expect(result!.messageId).toBe("newer");
+    expect(result!.code).toBe("222222");
+  });
+
   it("returns MEDIUM confidence when only the subject matches (no sender hint provided)", () => {
     const result = extractVerificationCode([message()], { requestedAt: REQUESTED_AT });
     expect(result!.confidence).toBe("MEDIUM");
@@ -106,5 +129,29 @@ describe("extractVerificationCode", () => {
     const noCode = message({ snippet: "Welcome to Uber! Please complete your registration." });
     const result = extractVerificationCode([noCode], { requestedAt: REQUESTED_AT });
     expect(result).toBeNull();
+  });
+
+  it("prefers the message that mentions expectedRecipient in a catch-all inbox", () => {
+    const otherAlias = message({
+      id: "other",
+      snippet: "code for galldelivery@mail2too.com is 111111",
+      bodyText: "galldelivery@mail2too.com verification code 111111",
+      receivedAt: new Date("2026-01-01T12:05:00Z"),
+    });
+    const targetAlias = message({
+      id: "target",
+      snippet: "code for gallsuper10@mail2too.com is 222222",
+      bodyText: "gallsuper10@mail2too.com verification code 222222",
+      receivedAt: new Date("2026-01-01T12:02:00Z"),
+    });
+
+    const result = extractVerificationCode([otherAlias, targetAlias], {
+      requestedAt: REQUESTED_AT,
+      expectedSender: "noreply@uber.com",
+      expectedRecipient: "gallsuper10@mail2too.com",
+    });
+
+    expect(result!.messageId).toBe("target");
+    expect(result!.code).toBe("222222");
   });
 });

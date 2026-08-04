@@ -28,6 +28,10 @@ export {
   resolveImapOptions,
   type KnownImapProvider,
 } from "./imapProviderConfig";
+export {
+  IMAP_CATCHALL_INBOX_BY_DOMAIN,
+  resolveCatchallInboxEmail,
+} from "./imapCatchallConfig";
 export { testImapConnectivity, type ImapTestResult } from "./imapTest";
 export type {
   EmailAccountRepository,

@@ -26,6 +26,11 @@ const envSchema = z.object({
     .regex(/^[0-9a-fA-F]{64}$/, "CREDENTIAL_ENCRYPTION_KEY must be 64 hex characters (32 bytes)"),
   LOGIN_RATE_LIMIT_WINDOW_MS: z.coerce.number().int().default(900000),
   LOGIN_RATE_LIMIT_MAX_ATTEMPTS: z.coerce.number().int().default(5),
+  // Mesmo path do worker - relativo à raiz do monorepo.
+  BROWSER_PROFILES_STORAGE_PATH: z
+    .string()
+    .default("apps/worker/storage/browser-profiles"),
+  AUTOMATION_SCREENSHOTS_PATH: z.string().default("apps/worker/storage/automation-screenshots"),
 });
 
 export const env = envSchema.parse(process.env);

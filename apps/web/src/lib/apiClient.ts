@@ -85,10 +85,17 @@ export async function apiRequest<T>(
  * temporário. Retorna `false` se a resposta não for OK (ex: sessão expirada).
  */
 export async function apiDownload(path: string, filename: string): Promise<boolean> {
-  const headers = new Headers();
-  if (accessToken) headers.set("Authorization", `Bearer ${accessToken}`);
+  async function doFetch(): Promise<Response> {
+    const headers = new Headers();
+    if (accessToken) headers.set("Authorization", `Bearer ${accessToken}`);
+    return fetch(`${API_URL}${path}`, { headers, credentials: "include" });
+  }
 
-  const response = await fetch(`${API_URL}${path}`, { headers, credentials: "include" });
+  let response = await doFetch();
+  if (response.status === 401) {
+    const refreshed = await tryRefresh();
+    if (refreshed) response = await doFetch();
+  }
   if (!response.ok) return false;
 
   const blob = await response.blob();

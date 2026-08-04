@@ -143,10 +143,41 @@ describe("processAutomationJob", () => {
     await expect(processAutomationJob(job, deps)).rejects.toThrow(NonRetryableAutomationError);
 
     expect(job.discarded).toBe(true);
-    expect(markAwaitingHumanAction).toHaveBeenCalledWith("applicant-1", "CAPTCHA");
+    expect(markAwaitingHumanAction.mock.calls[0]?.[0]).toBe("applicant-1");
+    expect(markAwaitingHumanAction.mock.calls[0]?.[1]).toBe("CAPTCHA");
     const actions = deps.sink.mock.calls.map((c) => c[0].action);
     expect(actions).toContain("automation_job_paused");
     expect(actions).not.toContain("automation_job_attempt_failed");
+  });
+
+  it("discards REFUSED (Uber Internal Server Error) as FAILED without pending action", async () => {
+    const emailVerificationWorker: IEmailVerificationWorker = {
+      findVerificationCode: vi
+        .fn()
+        .mockRejectedValue(
+          new NonRetryableAutomationError(
+            "REFUSED",
+            "Uber Internal Server Error — e-mail descartado (sem retentar)",
+          ),
+        ),
+      handleSecurityChallenge: vi.fn(),
+    };
+    const markDiscarded = vi.fn();
+    const markAwaitingHumanAction = vi.fn();
+    const deps = buildDeps({
+      emailVerificationWorker,
+      applicantStatusRepository: { markAwaitingHumanAction, markDiscarded },
+    });
+    const job = new FakeJob(baseJobData());
+
+    await expect(processAutomationJob(job, deps)).rejects.toThrow(NonRetryableAutomationError);
+
+    expect(job.discarded).toBe(true);
+    expect(markDiscarded).toHaveBeenCalledWith("applicant-1", "email-1", "REFUSED");
+    expect(markAwaitingHumanAction).not.toHaveBeenCalled();
+    const actions = deps.sink.mock.calls.map((c) => c[0].action);
+    expect(actions).toContain("automation_job_discarded");
+    expect(actions).not.toContain("automation_job_paused");
   });
 
   it("pauses (does not retry) when the email worker reports a security challenge", async () => {
@@ -166,7 +197,8 @@ describe("processAutomationJob", () => {
     await expect(processAutomationJob(job, deps)).rejects.toThrow(SecurityChallengeError);
 
     expect(job.discarded).toBe(true);
-    expect(markAwaitingHumanAction).toHaveBeenCalledWith("applicant-1", "TWO_FACTOR");
+    expect(markAwaitingHumanAction.mock.calls[0]?.[0]).toBe("applicant-1");
+    expect(markAwaitingHumanAction.mock.calls[0]?.[1]).toBe("TWO_FACTOR");
   });
 
   it("keeps the job retryable (no discard) on a technical error", async () => {

@@ -13,8 +13,13 @@ describe("splitFullName", () => {
     });
   });
 
-  it("nome com uma palavra so: sobrenome fica vazio", () => {
-    expect(splitFullName("Madonna")).toEqual({ firstName: "Madonna", lastName: "" });
+  it("nome com uma palavra so: sobrenome fica placeholder Driver (Uber exige last name)", () => {
+    expect(splitFullName("Madonna")).toEqual({ firstName: "Madonna", lastName: "Driver" });
+    expect(splitFullName("galldelivery")).toEqual({ firstName: "galldelivery", lastName: "Driver" });
+  });
+
+  it("nome vazio: fallback administrativo", () => {
+    expect(splitFullName("   ")).toEqual({ firstName: "Driver", lastName: "Partner" });
   });
 
   it("normaliza espacos extras", () => {
@@ -34,23 +39,39 @@ describe("buildPlaceholderPassword", () => {
   it("nome com uma palavra so: usa o proprio nome", () => {
     expect(buildPlaceholderPassword("Madonna", "@2026")).toBe("Madonna@2026");
   });
+
+  it("sobrenome curto: completa com x até ≥ 8 caracteres (regra Uber)", () => {
+    expect(buildPlaceholderPassword("Zeamalho Sa", "@2026")).toBe("Sax@2026");
+    expect(buildPlaceholderPassword("Li", "@2026")).toBe("Lix@2026");
+  });
 });
 
 describe("buildPlaceholderPhone", () => {
-  it("gera numero no formato US com prefixo fictício 555-01", () => {
-    const phone = buildPlaceholderPhone("11111111-1111-1111-1111-111111111111");
-    expect(phone).toMatch(/^\(201\) 555-01\d{2}$/);
+  it("gera número US a partir da base 5613256600", () => {
+    expect(buildPlaceholderPhone("any", 0)).toBe("(561) 325-6600");
   });
 
-  it("é determinístico para o mesmo applicantId", () => {
-    const a = buildPlaceholderPhone("applicant-a");
-    const b = buildPlaceholderPhone("applicant-a");
-    expect(a).toBe(b);
+  it("incrementa 01 02 03 nas tentativas seguintes", () => {
+    expect(buildPlaceholderPhone("any", 1)).toBe("(561) 325-6601");
+    expect(buildPlaceholderPhone("any", 2)).toBe("(561) 325-6602");
+    expect(buildPlaceholderPhone("any", 3)).toBe("(561) 325-6603");
   });
 
-  it("varia entre applicantIds diferentes (reduz colisão em lote)", () => {
-    const a = buildPlaceholderPhone("applicant-a");
-    const b = buildPlaceholderPhone("applicant-b");
-    expect(a).not.toBe(b);
+  it("é estável para o mesmo attempt (independente do applicantId)", () => {
+    expect(buildPlaceholderPhone("a", 0)).toBe(buildPlaceholderPhone("b", 0));
+  });
+});
+
+describe("nextFreePlaceholderPhoneDigits", () => {
+  it("começa na base quando nenhum número está bloqueado", async () => {
+    const { nextFreePlaceholderPhoneDigits, formatUsPhoneFromDigits } = await import("./nameUtils");
+    expect(formatUsPhoneFromDigits(nextFreePlaceholderPhoneDigits([]))).toBe("(561) 325-6600");
+  });
+
+  it("pula números já usados no hub", async () => {
+    const { nextFreePlaceholderPhoneDigits, formatUsPhoneFromDigits } = await import("./nameUtils");
+    expect(
+      formatUsPhoneFromDigits(nextFreePlaceholderPhoneDigits(["5613256600", "5613256601"])),
+    ).toBe("(561) 325-6602");
   });
 });

@@ -1,5 +1,14 @@
+import path from "node:path";
+import { access, readFile, readdir, rm, unlink } from "node:fs/promises";
 import { and, eq, inArray, or, sql } from "drizzle-orm";
-import { db, applicants, proxyConfigs, emailAccounts } from "@uber-automation/database";
+import {
+  db,
+  applicants,
+  proxyConfigs,
+  emailAccounts,
+  auditLogs,
+  browserProfiles,
+} from "@uber-automation/database";
 import {
   validateApplicantImportRows,
   type ApplicantImportRow,
@@ -7,7 +16,14 @@ import {
 } from "@uber-automation/shared";
 import { HttpError } from "../middleware/errorHandler";
 import { createCredentialVault } from "../lib/credentialVault";
-import { enqueueStartAutomationJob } from "../lib/automationQueue";
+import {
+  cancelAutomationJobsForApplicant,
+  enqueueOpenManualBrowserJob,
+  enqueueStartAutomationJob,
+  signalCloseManualBrowser,
+} from "../lib/automationQueue";
+import { env } from "../env";
+import { defaultBrowserProfilesRoot, MONOREPO_ROOT, resolveApplicantProfileDir } from "../lib/storagePaths";
 
 export interface ApplicantPreviewRow {
   row: number;
@@ -278,7 +294,14 @@ export async function startAutomation(
 
   await db
     .update(applicants)
-    .set({ status: "IN_PROGRESS", updatedAt: new Date() })
+    .set({
+      status: "IN_PROGRESS",
+      pauseReason: null,
+      resolvedAt: null,
+      resolvedByOperatorId: null,
+      currentStep: "RUN_ADMINISTRATIVE_FLOW",
+      updatedAt: new Date(),
+    })
     .where(eq(applicants.id, applicantId));
 
   return { jobId };
@@ -292,4 +315,210 @@ export async function getApplicantStatusDistribution(companyId: string) {
     .groupBy(applicants.status);
 
   return rows;
+}
+
+async function pathExists(target: string): Promise<boolean> {
+  try {
+    await access(target);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function resolveUberCookiesFile(applicantId: string): Promise<string | null> {
+  const profileDir = await resolveApplicantProfileDir(
+    env.BROWSER_PROFILES_STORAGE_PATH || defaultBrowserProfilesRoot(),
+    applicantId,
+  );
+  const filePath = path.join(profileDir, "uber", "cookies.json");
+  return (await pathExists(filePath)) ? filePath : null;
+}
+
+/**
+ * Hard-delete do motorista: limpa jobs BullMQ, desvincula audit_logs,
+ * apaga pasta do browser profile + screenshots, e DELETE no Postgres
+ * (cascade cobre email_accounts / browser_profiles / driver_deliveries).
+ */
+export async function deleteApplicant(companyId: string, applicantId: string): Promise<void> {
+  const applicant = await getApplicantById(companyId, applicantId);
+  if (!applicant) {
+    throw new HttpError(404, "NOT_FOUND", "Motorista não encontrado");
+  }
+
+  await cancelAutomationJobsForApplicant(applicantId).catch(() => 0);
+
+  await db
+    .update(auditLogs)
+    .set({ applicantId: null })
+    .where(eq(auditLogs.applicantId, applicantId));
+
+  await db.delete(applicants).where(eq(applicants.id, applicantId));
+
+  const profileDir = await resolveApplicantProfileDir(
+    env.BROWSER_PROFILES_STORAGE_PATH || defaultBrowserProfilesRoot(),
+    applicantId,
+  );
+  await rm(profileDir, { recursive: true, force: true }).catch(() => undefined);
+
+  const screenshotsRoot = path.isAbsolute(env.AUTOMATION_SCREENSHOTS_PATH)
+    ? env.AUTOMATION_SCREENSHOTS_PATH
+    : path.resolve(MONOREPO_ROOT, env.AUTOMATION_SCREENSHOTS_PATH);
+  // Prefer worker screenshots path as well.
+  for (const root of [
+    screenshotsRoot,
+    path.resolve(MONOREPO_ROOT, "apps/worker/storage/automation-screenshots"),
+  ]) {
+    const files = await readdir(root).catch(() => [] as string[]);
+    await Promise.all(
+      files
+        .filter((name) => name.startsWith(applicantId))
+        .map((name) => unlink(path.join(root, name)).catch(() => undefined)),
+    );
+  }
+}
+
+export interface UberCookiesExport {
+  applicantId: string;
+  externalId: string;
+  fullName: string;
+  cookieCount: number;
+  cookies: unknown[];
+  exportedAt: string;
+}
+
+/**
+ * Lê cookies Uber persistidos pelo worker após o job (Playwright JSON).
+ * Útil para reabrir a sessão / importar no browser.
+ */
+export async function getUberCookiesExport(
+  companyId: string,
+  applicantId: string,
+): Promise<UberCookiesExport> {
+  const applicant = await getApplicantById(companyId, applicantId);
+  if (!applicant) {
+    throw new HttpError(404, "NOT_FOUND", "Motorista não encontrado");
+  }
+
+  const filePath = await resolveUberCookiesFile(applicantId);
+  if (!filePath) {
+    throw new HttpError(
+      404,
+      "COOKIES_NOT_FOUND",
+      "Nenhum cookie Uber salvo ainda para este motorista (rode a automação até criar/pausar a conta)",
+    );
+  }
+
+  let cookies: unknown[] = [];
+  try {
+    const parsed = JSON.parse(await readFile(filePath, "utf8")) as unknown;
+    cookies = Array.isArray(parsed) ? parsed : [];
+  } catch {
+    throw new HttpError(500, "COOKIES_CORRUPT", "Arquivo de cookies inválido");
+  }
+
+  if (cookies.length === 0) {
+    throw new HttpError(
+      404,
+      "COOKIES_EMPTY",
+      "Arquivo de cookies existe mas está vazio — a sessão ainda não foi persistida",
+    );
+  }
+
+  return {
+    applicantId: applicant.id,
+    externalId: applicant.externalId,
+    fullName: applicant.fullName,
+    cookieCount: cookies.length,
+    cookies,
+    exportedAt: new Date().toISOString(),
+  };
+}
+
+/**
+ * Enfileira sessão headed (janela real) com proxy + cookies do motorista
+ * para intervenção manual (ex: SMS). Não altera o status do applicant.
+ */
+export async function openManualBrowser(
+  companyId: string,
+  applicantId: string,
+  options?: { proxyId?: string },
+): Promise<{ jobId: string; proxyId: string }> {
+  const applicant = await getApplicantById(companyId, applicantId);
+  if (!applicant) {
+    throw new HttpError(404, "NOT_FOUND", "Motorista não encontrado");
+  }
+
+  const [emailAccount] = await db
+    .select({ id: emailAccounts.id })
+    .from(emailAccounts)
+    .where(and(eq(emailAccounts.companyId, companyId), eq(emailAccounts.applicantId, applicantId)))
+    .limit(1);
+  if (!emailAccount) {
+    throw new HttpError(
+      400,
+      "EMAIL_ACCOUNT_REQUIRED",
+      "Cadastre o e-mail deste motorista antes de abrir o browser manual",
+    );
+  }
+
+  let proxyId = options?.proxyId;
+  if (!proxyId) {
+    const [profile] = await db
+      .select({ proxyId: browserProfiles.proxyId })
+      .from(browserProfiles)
+      .where(eq(browserProfiles.applicantId, applicantId))
+      .limit(1);
+    proxyId = profile?.proxyId ?? undefined;
+  }
+  if (!proxyId) {
+    const [activeProxy] = await db
+      .select({ id: proxyConfigs.id })
+      .from(proxyConfigs)
+      .where(and(eq(proxyConfigs.companyId, companyId), eq(proxyConfigs.status, "ACTIVE")))
+      .limit(1);
+    proxyId = activeProxy?.id;
+  }
+  if (!proxyId) {
+    throw new HttpError(
+      400,
+      "PROXY_REQUIRED",
+      "Informe um proxy ou cadastre/ative um proxy para a empresa",
+    );
+  }
+
+  const [proxy] = await db
+    .select({ id: proxyConfigs.id })
+    .from(proxyConfigs)
+    .where(and(eq(proxyConfigs.companyId, companyId), eq(proxyConfigs.id, proxyId)))
+    .limit(1);
+  if (!proxy) {
+    throw new HttpError(400, "PROXY_NOT_FOUND", "Proxy inexistente para esta empresa");
+  }
+
+  const jobId = await enqueueOpenManualBrowserJob({
+    companyId,
+    applicantId,
+    emailAccountId: emailAccount.id,
+    proxyId,
+  });
+
+  return { jobId, proxyId };
+}
+
+/** Sinaliza o worker para fechar o Chromium manual deste motorista. */
+export async function closeManualBrowser(
+  companyId: string,
+  applicantId: string,
+): Promise<{ stopSignaled: boolean; removedQueuedJobs: number }> {
+  const applicant = await getApplicantById(companyId, applicantId);
+  if (!applicant) {
+    throw new HttpError(404, "NOT_FOUND", "Motorista não encontrado");
+  }
+
+  const result = await signalCloseManualBrowser(applicantId);
+  return {
+    stopSignaled: result.stopSignaled,
+    removedQueuedJobs: result.removedQueuedJobs,
+  };
 }
