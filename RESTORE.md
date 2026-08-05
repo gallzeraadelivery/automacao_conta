@@ -22,6 +22,7 @@ git branch -a | grep backup/
 | **Nome legível** | Electron Android signup |
 | **Tag** | `restore/electron-android-2026-08-05` |
 | **Branch de backup** | `backup/electron-android-2026-08-05` |
+| **Commit** | `6db2113` |
 | **Branch principal** | `claude/sistema-6-fases-iuzzhr` |
 | **Data** | 2026-08-05 |
 
