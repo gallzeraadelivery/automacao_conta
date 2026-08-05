@@ -76,6 +76,12 @@ services:
       # container (ver volume browser_profiles_data abaixo e
       # @uber-automation/automation BrowserProfileManager).
       BROWSER_PROFILES_STORAGE_PATH: /app/storage/browser-profiles
+      # Headed via xvfb. Em Linux aarch64 (Docker Desktop Mac) o canal
+      # `chrome` NÃO existe — usamos chromium headed (mesmo build 151).
+      # Em linux/amd64 pode trocar para chrome (Chrome for Testing).
+      AUTOMATION_HEADLESS: "false"
+      PLAYWRIGHT_BROWSER_CHANNEL: chromium
+      AUTOMATION_BROWSER_ENGINE: electron
       # AUTOMATION_TARGET=mock (padrão, ver .env.example) mira aqui, no
       # serviço mock-server dentro da rede Docker - nunca na Uber real. O
       # mock-server só sobe com `docker compose --profile dev up`; sem ele,

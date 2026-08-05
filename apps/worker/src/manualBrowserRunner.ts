@@ -1,13 +1,15 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { chromium, type Browser } from "playwright";
 import IORedis from "ioredis";
 import { AuditLogger } from "@uber-automation/security";
 import { BrowserProfileManager } from "@uber-automation/automation";
 import { env } from "./env";
 import { resolveProxyConnection } from "./proxyConnection";
 import { TechnicalAutomationError } from "./errors";
-import { pickFingerprint } from "./browserFingerprint";
+import { pickSignupMobileFingerprint } from "./browserFingerprint";
+import { alignFingerprintToProxy } from "./fingerprintAlign";
+import { applyStealthToContext } from "./browserStealth";
+import { launchAutomationBrowserSession } from "./browserLaunch";
 import type { AutomationJobLike } from "./processor";
 import {
   loadUberStorageState,
@@ -52,7 +54,14 @@ export function createManualBrowserRunner(
   return async function runManualBrowser(job: AutomationJobLike): Promise<void> {
     const data = job.data;
     const auditLogger = options.auditLogger;
-    const fingerprint = pickFingerprint(0);
+    const proxyConnection = await resolveProxyConnection(data.proxyId);
+    if (!proxyConnection) {
+      throw new TechnicalAutomationError("PROXY_UNAVAILABLE", "Proxy do job não encontrado");
+    }
+    const fingerprint = alignFingerprintToProxy(
+      pickSignupMobileFingerprint(0),
+      proxyConnection.declaredRegion,
+    );
     const jobId = String(job.id ?? "");
     const redis = new IORedis(env.REDIS_URL, { maxRetriesPerRequest: null });
     let clearActiveOnExit = true;
@@ -85,14 +94,6 @@ export function createManualBrowserRunner(
         companyId: data.companyId,
         storageRoot: browserProfilesRoot(),
       });
-
-      const proxyConnection = await resolveProxyConnection(data.proxyId).catch(() => null);
-      if (!proxyConnection) {
-        throw new TechnicalAutomationError(
-          "PROXY_UNAVAILABLE",
-          "Proxy do browser manual não encontrado ou credenciais inválidas",
-        );
-      }
 
       let profile = await browserProfileManager.getActiveProfileId(data.applicantId).then(async (id) => {
         if (id) {
@@ -127,6 +128,8 @@ export function createManualBrowserRunner(
           jarSize: loadedCookieCount,
           originCount: storageState.origins.length,
           fingerprintId: fingerprint.id,
+          timezoneId: fingerprint.timezoneId,
+          proxyRegion: proxyConnection.declaredRegion,
           hasUberJwt: storageState.cookies.some((c) => c.name === "jwt-session"),
           hubSessionLikely,
           jobId,
@@ -140,11 +143,12 @@ export function createManualBrowserRunner(
         );
       }
 
-      const browser: Browser = await chromium.launch({
+      const session = await launchAutomationBrowserSession({
+        fingerprint,
+        proxy: proxyConnection,
         headless: false,
-        executablePath: env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH,
-        args: ["--disable-blink-features=AutomationControlled"],
       });
+      const browser = session.browser;
 
       let saveTimer: ReturnType<typeof setInterval> | undefined;
       let stopPollTimer: ReturnType<typeof setInterval> | undefined;
@@ -152,23 +156,37 @@ export function createManualBrowserRunner(
       let closedByStopSignal = false;
 
       try {
-        const context = await browser.newContext({
-          proxy: {
-            server: proxyConnection.server,
-            username: proxyConnection.username,
-            password: proxyConnection.password,
-          },
+        let context;
+        if (session.engine === "electron") {
+          context = browser.contexts()[0];
+          if (!context) throw new Error("Electron CDP sem BrowserContext");
+          if (storageState.cookies.length > 0) {
+            await context.addCookies(storageState.cookies).catch(() => undefined);
+          }
+        } else {
+          context = await browser.newContext({
+            proxy: {
+              server: proxyConnection.server,
+              username: proxyConnection.username,
+              password: proxyConnection.password,
+            },
+            locale: fingerprint.locale,
+            userAgent: fingerprint.userAgent,
+            viewport: fingerprint.viewport,
+            timezoneId: fingerprint.timezoneId,
+            deviceScaleFactor: fingerprint.deviceScaleFactor,
+            isMobile: true,
+            hasTouch: true,
+            storageState: {
+              cookies: storageState.cookies,
+              origins: storageState.origins,
+            },
+          });
+        }
+
+        await applyStealthToContext(context, {
           locale: fingerprint.locale,
-          userAgent: fingerprint.userAgent,
-          viewport: fingerprint.viewport,
-          timezoneId: fingerprint.timezoneId,
-          deviceScaleFactor: fingerprint.deviceScaleFactor,
-          isMobile: Boolean(fingerprint.isMobile),
-          hasTouch: Boolean(fingerprint.hasTouch ?? fingerprint.isMobile),
-          storageState: {
-            cookies: storageState.cookies,
-            origins: storageState.origins,
-          },
+          fingerprint,
         });
 
         const injected = await context.cookies();
@@ -279,7 +297,7 @@ export function createManualBrowserRunner(
             void redis.get(stopKey).then((flag) => {
               if (!flag) return;
               closedByStopSignal = true;
-              void browser.close().catch(() => undefined);
+              void session.close().catch(() => undefined);
             });
           }, 1_000);
         });
@@ -290,7 +308,7 @@ export function createManualBrowserRunner(
       } finally {
         if (saveTimer) clearInterval(saveTimer);
         if (stopPollTimer) clearInterval(stopPollTimer);
-        await browser.close().catch(() => undefined);
+        await session.close().catch(() => undefined);
       }
 
       await auditLogger.log({

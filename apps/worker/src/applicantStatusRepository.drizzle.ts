@@ -99,4 +99,17 @@ export class DrizzleApplicantStatusRepository implements ApplicantStatusReposito
       })
       .where(eq(emailAccounts.id, emailAccountId));
   }
+
+  async markStopped(applicantId: string): Promise<void> {
+    await db
+      .update(applicants)
+      .set({
+        status: "READY_TO_START",
+        pauseReason: null,
+        pausedAt: null,
+        currentStep: null,
+        updatedAt: new Date(),
+      })
+      .where(eq(applicants.id, applicantId));
+  }
 }

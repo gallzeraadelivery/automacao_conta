@@ -1,7 +1,7 @@
 import path from "node:path";
 import { mkdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
+import { type Browser, type BrowserContext, type Page } from "playwright";
 import { AuditLogger } from "@uber-automation/security";
 import type { IEmailVerificationWorker } from "@uber-automation/email-service";
 import {
@@ -21,13 +21,27 @@ import {
 } from "@uber-automation/platform-adapters";
 import { env } from "./env";
 import { resolveProxyConnection } from "./proxyConnection";
-import { NonRetryableAutomationError, TechnicalAutomationError, type TechnicalReason } from "./errors";
+import { NonRetryableAutomationError, TechnicalAutomationError, AutomationStoppedError, type TechnicalReason } from "./errors";
 import type { AutomationJobLike } from "./processor";
-import { pickFingerprint, pickMobileFingerprint, type BrowserFingerprint } from "./browserFingerprint";
+import { pickSignupMobileFingerprint, mobilePlatformOf, type BrowserFingerprint } from "./browserFingerprint";
 import { loadUberStorageState, persistUberStorageState } from "./sessionRestore";
 import { createPlaceholderPhoneAllocator } from "./placeholderPhonePool";
 import { allocateNextEarnCity } from "./earnCityPool";
-
+import {
+  automationStopAllKey,
+  automationStopKey,
+} from "./automationStopControl";
+import {
+  advanceFingerprintIndex,
+  getFingerprintIndex,
+} from "./fingerprintRotation";
+import { alignFingerprintToProxy } from "./fingerprintAlign";
+import {
+  applyStealthToContext,
+  humanPauseMs,
+} from "./browserStealth";
+import { launchAutomationBrowserSession } from "./browserLaunch";
+import IORedis from "ioredis";
 const MONOREPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 
 /** Mesmo root do manual browser — path relativo no .env resolve na raiz do monorepo. */
@@ -45,10 +59,10 @@ export interface UberAutomationRunnerOptions {
 /**
  * Tentativas extras após CAPTCHA, "Request failed" (LOAD_ERROR), OTP SMS
  * no placeholder (PHONE_SMS_RETRY) ou IMAP sem código na tela OTP
- * (EMAIL_CODE_RETRY): limpa perfil + novo fingerprint + outro telefone.
+ * (EMAIL_CODE_RETRY): limpa perfil + novo fingerprint (índice Redis persistente).
  * Total = 1 execução inicial + este número.
  */
-const MAX_SESSION_ROTATIONS = 4;
+const MAX_SESSION_ROTATIONS = 6;
 
 /** Placeholders por sessão em fillPhoneStep — offset avança a cada rotação. */
 const PHONE_ATTEMPTS_PER_SESSION = 3;
@@ -196,7 +210,8 @@ function rotationReason(
  *   sobrenome do motorista; não há login numa conta pré-existente).
  *
  * Em CAPTCHA / LOAD_ERROR / PHONE_SMS_RETRY / EMAIL_CODE_RETRY: limpa perfil e
- * troca fingerprint (exceto se a conta Uber já foi criada — aí nunca apaga cookies).
+ * avança fingerprint no Redis (exceto se a conta Uber já foi criada — aí nunca
+ * apaga cookies). Índice persiste entre retries BullMQ para não repetir o FP 0.
  */
 export function createUberAutomationRunner(
   options: UberAutomationRunnerOptions,
@@ -231,67 +246,96 @@ export function createUberAutomationRunner(
     );
 
     const phoneAllocator = createPlaceholderPhoneAllocator(data.applicantId);
+    const rotationRedis = new IORedis(env.REDIS_URL, { maxRetriesPerRequest: null });
+    let fingerprintIndex = await getFingerprintIndex(rotationRedis, data.applicantId).catch(
+      () => 0,
+    );
 
-    for (let attempt = 0; attempt <= MAX_SESSION_ROTATIONS; attempt += 1) {
-      // Desktop no signup; mobile só com conta já criada (Take Photo Veriff/Socure).
-      const fingerprint = uberAccountCreated
-        ? pickMobileFingerprint(attempt)
-        : pickFingerprint(attempt);
-      const result = await runSingleBrowserAttempt({
-        data,
-        profile,
-        fingerprint,
-        proxyConnection,
-        isProduction,
-        emailVerificationWorker,
-        auditLogger: options.auditLogger,
-        phoneAttemptOffset: attempt * PHONE_ATTEMPTS_PER_SESSION,
-        uberAccountCreated,
-        uberEarnSetupComplete,
-        phoneAllocator,
-      });
+    try {
+      for (let attempt = 0; attempt <= MAX_SESSION_ROTATIONS; attempt += 1) {
+        // Sempre mobile (Android ↔ iPhone). Desktop desativado.
+        const fingerprint = alignFingerprintToProxy(
+          pickSignupMobileFingerprint(fingerprintIndex),
+          proxyConnection?.declaredRegion,
+        );
+        const result = await runSingleBrowserAttempt({
+          data,
+          profile,
+          fingerprint,
+          proxyConnection,
+          isProduction,
+          emailVerificationWorker,
+          auditLogger: options.auditLogger,
+          phoneAttemptOffset: attempt * PHONE_ATTEMPTS_PER_SESSION,
+          uberAccountCreated,
+          uberEarnSetupComplete,
+          phoneAllocator,
+        });
 
-      // Conta já criada: nunca rotaciona/limpa cookies (perderia o hub).
-      if (uberAccountCreated || !isRotatableSessionFailure(result)) {
-        handleResult(result, result._screenshotPath);
-        return;
+        // Conta já criada: nunca rotaciona/limpa cookies (perderia o hub).
+        if (uberAccountCreated || !isRotatableSessionFailure(result)) {
+          handleResult(result, result._screenshotPath);
+          return;
+        }
+
+        const screenshotPath = result._screenshotPath;
+        const reason = rotationReason(result);
+
+        // Sempre avança fingerprint (OTP não chegou / captcha / load error / SMS).
+        const nextIndex = await advanceFingerprintIndex(rotationRedis, data.applicantId).catch(
+          () => fingerprintIndex + 1,
+        );
+        const nextFingerprint = alignFingerprintToProxy(
+          pickSignupMobileFingerprint(nextIndex),
+          proxyConnection?.declaredRegion,
+        );
+
+        await options.auditLogger.log({
+          companyId: data.companyId,
+          applicantId: data.applicantId,
+          action: "browser_session_rotated",
+          metadata: {
+            reason,
+            attempt: attempt + 1,
+            maxRotations: MAX_SESSION_ROTATIONS,
+            phoneAttemptOffset: (attempt + 1) * PHONE_ATTEMPTS_PER_SESSION,
+            fingerprintIndex,
+            nextFingerprintIndex: nextIndex,
+            previousFingerprintId: fingerprint.id,
+            nextFingerprintId: nextFingerprint.id,
+            nextDeviceName: nextFingerprint.deviceName,
+            nextAudioNoiseSeed: nextFingerprint.audioNoiseSeed,
+            nextWebglRenderer: nextFingerprint.webglRenderer.slice(0, 80),
+            previousProfileId: profile.id,
+            screenshotPath,
+            exhausted: attempt >= MAX_SESSION_ROTATIONS,
+          },
+        });
+
+        // Limpa perfil mesmo na última tentativa: próximo retry BullMQ já nasce limpo.
+        profile = await rotateBrowserProfile(
+          browserProfileManager,
+          profile,
+          data.applicantId,
+          data.emailAccountId,
+          data.proxyId,
+        );
+        fingerprintIndex = nextIndex;
+
+        if (attempt >= MAX_SESSION_ROTATIONS) {
+          handleResult(result, screenshotPath);
+          return;
+        }
+
+        // CAPTCHA: cooldown maior antes de nova tentativa (menos ban/rate-limit).
+        const cooldownMs =
+          reason === "CAPTCHA"
+            ? 8_000 + attempt * 3_500
+            : 2_500 + attempt * 1_500;
+        await new Promise((resolve) => setTimeout(resolve, cooldownMs));
       }
-
-      const screenshotPath = result._screenshotPath;
-      const reason = rotationReason(result);
-      if (attempt >= MAX_SESSION_ROTATIONS) {
-        handleResult(result, screenshotPath);
-        return;
-      }
-
-      await options.auditLogger.log({
-        companyId: data.companyId,
-        applicantId: data.applicantId,
-        action: "browser_session_rotated",
-        metadata: {
-          reason,
-          attempt: attempt + 1,
-          maxRotations: MAX_SESSION_ROTATIONS,
-          phoneAttemptOffset: (attempt + 1) * PHONE_ATTEMPTS_PER_SESSION,
-          previousFingerprintId: fingerprint.id,
-          nextFingerprintId: (uberAccountCreated
-            ? pickMobileFingerprint(attempt + 1)
-            : pickFingerprint(attempt + 1)
-          ).id,
-          previousProfileId: profile.id,
-          screenshotPath,
-        },
-      });
-
-      await new Promise((resolve) => setTimeout(resolve, 2_500 + attempt * 1_500));
-
-      profile = await rotateBrowserProfile(
-        browserProfileManager,
-        profile,
-        data.applicantId,
-        data.emailAccountId,
-        data.proxyId,
-      );
+    } finally {
+      await rotationRedis.quit().catch(() => undefined);
     }
   };
 }
@@ -325,36 +369,85 @@ async function runSingleBrowserAttempt(args: {
     phoneAllocator,
   } = args;
 
-  const browser: Browser = await chromium.launch({
-    headless: env.AUTOMATION_HEADLESS,
-    executablePath: env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH,
+  const session = await launchAutomationBrowserSession({
+    fingerprint,
+    proxy: isProduction ? proxyConnection : null,
   });
+  const browser = session.browser;
+
+  const redis = new IORedis(env.REDIS_URL, {
+    maxRetriesPerRequest: null,
+  });
+  let stopPollTimer: ReturnType<typeof setInterval> | undefined;
+  let stoppedByOperator = false;
 
   let context: BrowserContext | undefined;
   try {
+    // Limpa sinal antigo e começa a escutar Parar / Parar todos.
+    await redis.del(automationStopKey(data.applicantId)).catch(() => undefined);
+    stopPollTimer = setInterval(() => {
+      void Promise.all([
+        redis.get(automationStopKey(data.applicantId)),
+        redis.get(automationStopAllKey(data.companyId)),
+      ]).then(([one, all]) => {
+        if (!one && !all) return;
+        stoppedByOperator = true;
+        void session.close().catch(() => undefined);
+      });
+    }, 1_000);
+
     const storageState = await loadUberStorageState(profile.storagePath);
 
-    context = await browser.newContext({
-      proxy:
-        isProduction && proxyConnection
-          ? {
-              server: proxyConnection.server,
-              username: proxyConnection.username,
-              password: proxyConnection.password,
-            }
-          : undefined,
+    if (session.engine === "electron") {
+      // Electron já abriu janela mobile + UA + proxy. Reusa o context CDP.
+      const existing = browser.contexts()[0];
+      if (!existing) {
+        throw new Error("Electron CDP sem BrowserContext");
+      }
+      context = existing;
+      // Emula mobile no CDP (touch / meta viewport) quando possível.
+      await context
+        .addInitScript(() => {
+          try {
+            Object.defineProperty(navigator, "maxTouchPoints", {
+              get: () => 5,
+              configurable: true,
+            });
+          } catch {
+            /* ignore */
+          }
+        })
+        .catch(() => undefined);
+      if (storageState.cookies.length > 0) {
+        await context.addCookies(storageState.cookies).catch(() => undefined);
+      }
+    } else {
+      context = await browser.newContext({
+        proxy:
+          isProduction && proxyConnection
+            ? {
+                server: proxyConnection.server,
+                username: proxyConnection.username,
+                password: proxyConnection.password,
+              }
+            : undefined,
+        locale: fingerprint.locale,
+        userAgent: fingerprint.userAgent,
+        viewport: fingerprint.viewport,
+        timezoneId: fingerprint.timezoneId,
+        deviceScaleFactor: fingerprint.deviceScaleFactor,
+        isMobile: true,
+        hasTouch: true,
+        storageState:
+          storageState.cookies.length > 0 || storageState.origins.length > 0
+            ? { cookies: storageState.cookies, origins: storageState.origins }
+            : undefined,
+      });
+    }
+
+    await applyStealthToContext(context, {
       locale: fingerprint.locale,
-      userAgent: fingerprint.userAgent,
-      viewport: fingerprint.viewport,
-      timezoneId: fingerprint.timezoneId,
-      deviceScaleFactor: fingerprint.deviceScaleFactor,
-      isMobile: Boolean(fingerprint.isMobile),
-      hasTouch: Boolean(fingerprint.hasTouch ?? fingerprint.isMobile),
-      // Restaura cookies + localStorage (antes só addCookies — sessão “morta”).
-      storageState:
-        storageState.cookies.length > 0 || storageState.origins.length > 0
-          ? { cookies: storageState.cookies, origins: storageState.origins }
-          : undefined,
+      fingerprint,
     });
 
     await auditLogger.log({
@@ -367,10 +460,28 @@ async function runSingleBrowserAttempt(args: {
         originCount: storageState.origins.length,
         hasUberJwt: storageState.cookies.some((c) => c.name === "jwt-session"),
         uberAccountCreated,
+        fingerprintId: fingerprint.id,
+        mobilePlatform: mobilePlatformOf(fingerprint),
+        browserEngine: session.engine,
+        timezoneId: fingerprint.timezoneId,
+        deviceName: fingerprint.deviceName,
+        hardwareConcurrency: fingerprint.hardwareConcurrency,
+        deviceMemory: fingerprint.deviceMemory,
+        webglRenderer: fingerprint.webglRenderer.slice(0, 80),
+        audioNoiseSeed: fingerprint.audioNoiseSeed,
+        webrtcMode: fingerprint.webrtcMode,
+        canvasMode: fingerprint.canvasMode,
+        proxyRegion: proxyConnection?.declaredRegion ?? null,
+        stealth: true,
       },
     });
 
-    const page = await context.newPage();
+    const page =
+      session.engine === "electron" && context.pages().length > 0
+        ? context.pages()[0]!
+        : await context.newPage();
+    // Pausa curta antes do fluxo — reduz padrão goto→submit instantâneo.
+    await page.waitForTimeout(humanPauseMs(600, 1_400));
 
     const automationContext: AutomationContext = {
       applicantId: data.applicantId,
@@ -463,9 +574,20 @@ async function runSingleBrowserAttempt(args: {
         });
 
     const result: AutomationResult = await adapter.start(automationContext);
+    if (stoppedByOperator) {
+      throw new AutomationStoppedError();
+    }
     const screenshotPath = await captureDebugScreenshot(page, data.applicantId, result.status);
     return { ...result, _screenshotPath: screenshotPath };
+  } catch (error) {
+    if (stoppedByOperator) {
+      throw new AutomationStoppedError();
+    }
+    throw error;
   } finally {
+    if (stopPollTimer) clearInterval(stopPollTimer);
+    await redis.del(automationStopKey(data.applicantId)).catch(() => undefined);
+    await redis.quit().catch(() => undefined);
     // Nunca marcar golden no finally — só checkpoints explícitos no hub/conta.
     // Senão cookies da tela de login sobrescrevem a “sessão boa”.
     if (context) {
@@ -474,7 +596,7 @@ async function runSingleBrowserAttempt(args: {
         markGolden: false,
       }).catch(() => undefined);
     }
-    await browser.close().catch(() => undefined);
+    await session.close().catch(() => undefined);
   }
 }
 

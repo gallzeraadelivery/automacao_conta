@@ -6,6 +6,11 @@ import {
   manualBrowserActiveJobKey,
   manualBrowserStopKey,
 } from "./manualBrowserControl";
+import {
+  AUTOMATION_STOP_TTL_SEC,
+  automationStopAllKey,
+  automationStopKey,
+} from "./automationStopControl";
 import { HttpError } from "../middleware/errorHandler";
 
 /**
@@ -195,4 +200,91 @@ export async function cancelAutomationJobsForApplicant(applicantId: string): Pro
     removed += 1;
   }
   return removed;
+}
+
+export interface StopAutomationResult {
+  stopSignaled: boolean;
+  removedQueuedJobs: number;
+}
+
+/** Limpa o sinal “Parar todos” (ex.: ao iniciar novo start). */
+export async function clearAutomationStopAll(companyId: string): Promise<void> {
+  const r = getRedis();
+  await r.del(automationStopAllKey(companyId)).catch(() => undefined);
+}
+
+/** Para um motorista: tira da fila + sinaliza o Chromium ativo para fechar. */
+export async function stopAutomationForApplicant(applicantId: string): Promise<StopAutomationResult> {
+  const r = getRedis();
+  await r.set(automationStopKey(applicantId), "1", "EX", AUTOMATION_STOP_TTL_SEC);
+  // Também fecha browser manual se estiver aberto.
+  await r.set(manualBrowserStopKey(applicantId), "1", "EX", MANUAL_BROWSER_STOP_TTL_SEC);
+
+  const removedQueuedJobs = await cancelAutomationJobsForApplicant(applicantId);
+  await r.del(`concurrency:applicant:${applicantId}`).catch(() => undefined);
+
+  return { stopSignaled: true, removedQueuedJobs };
+}
+
+export interface StopAllAutomationsResult {
+  stopAllSignaled: boolean;
+  removedQueuedJobs: number;
+  applicantsSignaled: number;
+}
+
+/** Para toda a empresa: drena a fila e sinaliza stop-all + stop por motorista IN_PROGRESS. */
+export async function stopAllAutomationsForCompany(
+  companyId: string,
+  inProgressApplicantIds: string[],
+): Promise<StopAllAutomationsResult> {
+  const q = getQueue();
+  const r = getRedis();
+
+  await r.set(automationStopAllKey(companyId), "1", "EX", AUTOMATION_STOP_TTL_SEC);
+
+  let removedQueuedJobs = 0;
+  const jobs = await q.getJobs(
+    ["waiting", "delayed", "paused", "prioritized", "active"],
+    0,
+    2_000,
+  );
+  for (const job of jobs) {
+    const data = job.data as { companyId?: string; applicantId?: string; currentStep?: string } | undefined;
+    if (data?.companyId !== companyId) continue;
+    const state = await job.getState().catch(() => null);
+    if (state === "active") {
+      // Runner escuta stop-all / stop por applicant.
+      if (data.applicantId) {
+        await r.set(automationStopKey(data.applicantId), "1", "EX", AUTOMATION_STOP_TTL_SEC);
+        await r.set(manualBrowserStopKey(data.applicantId), "1", "EX", MANUAL_BROWSER_STOP_TTL_SEC);
+      }
+      continue;
+    }
+    await job.remove().catch(() => undefined);
+    removedQueuedJobs += 1;
+  }
+
+  for (const applicantId of inProgressApplicantIds) {
+    await r.set(automationStopKey(applicantId), "1", "EX", AUTOMATION_STOP_TTL_SEC);
+    await r.set(manualBrowserStopKey(applicantId), "1", "EX", MANUAL_BROWSER_STOP_TTL_SEC);
+    await r.del(`concurrency:applicant:${applicantId}`).catch(() => undefined);
+  }
+
+  // Limpa locks de concorrência da empresa (best-effort).
+  const keys = await r.keys(`concurrency:*`).catch(() => [] as string[]);
+  for (const key of keys) {
+    if (key.includes(companyId) || key.startsWith("concurrency:")) {
+      // só company key garantido:
+      if (key === `concurrency:company:${companyId}`) {
+        await r.del(key).catch(() => undefined);
+      }
+    }
+  }
+  await r.del(`concurrency:company:${companyId}`).catch(() => undefined);
+
+  return {
+    stopAllSignaled: true,
+    removedQueuedJobs,
+    applicantsSignaled: inProgressApplicantIds.length,
+  };
 }

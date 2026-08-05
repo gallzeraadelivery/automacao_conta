@@ -4,6 +4,7 @@ import { AuditLogger } from "@uber-automation/security";
 import { PlatformAdapter } from "../../base/PlatformAdapter";
 import { REAL_UBER_CONFIG, type RealUberConfig } from "./realConfig";
 import type { RealStepContext } from "./realStepContext";
+import { HumanInteraction } from "./humanize";
 import {
   acceptTermsStep,
   confirmAllSetStep,
@@ -58,6 +59,7 @@ export class RealUberSignupAdapter extends PlatformAdapter {
   private readonly markPlaceholderPhoneUsed?: (phone: string, reason?: string) => Promise<void>;
   private readonly allocateEarnCity?: () => Promise<string>;
   private readonly usedEmailCodes = new Set<string>();
+  private human!: HumanInteraction;
 
   constructor(page: Page, options: RealUberSignupAdapterOptions) {
     super(page);
@@ -71,6 +73,13 @@ export class RealUberSignupAdapter extends PlatformAdapter {
   }
 
   protected async executeSteps(): Promise<void> {
+    this.human = HumanInteraction.forPage(this.page);
+    await this.auditLogger.log({
+      companyId: this.context.companyId ?? "unknown",
+      applicantId: this.context.applicantId,
+      action: "uber_real_humanize_session",
+      metadata: { seed: this.human.seed },
+    });
     const ctx = this.buildStepContext();
     const accountCreated = Boolean(this.context.uberAccountCreated);
 
@@ -161,6 +170,7 @@ export class RealUberSignupAdapter extends PlatformAdapter {
       context: this.context,
       config: this.uberConfig,
       emailWorker: this.emailWorker,
+      human: this.human,
       recordStep: (step, metadata) => this.recordStep(step, metadata),
       persistSession: this.persistSession,
       usedEmailCodes: this.usedEmailCodes,

@@ -9,9 +9,9 @@ const PRIMARY_NEXT_NAME = /^(continuar|continue|next|pr[oó]ximo)(\s*→)?$/i;
 
 /**
  * Banner "We use cookies" (Accept / Reject / Cookie settings) - bloqueia
- * cliques no Next da tela de localização se não for dispensado.
+ * cliques no menu/Earn/Deliver e no Next se não for dispensado.
  */
-async function dismissCookieBannerIfPresent(page: Page, timeout: number): Promise<boolean> {
+export async function dismissCookieBannerIfPresent(page: Page, timeout: number): Promise<boolean> {
   const banner = page
     .getByText(/we use cookies/i)
     .or(page.getByText(/this website uses third party cookies/i));
@@ -113,15 +113,19 @@ export async function selectGenderStep(ctx: RealStepContext): Promise<void> {
     const fallbackMan = page.getByText(/^(man|male|homem)$/i).first();
 
     if (await preferLater.isVisible({ timeout: 2_000 }).catch(() => false)) {
-      await preferLater.click({ timeout: config.timeouts.elementWait });
+      await ctx.human.clickSafe(preferLater, { timeout: config.timeouts.elementWait });
     } else if (await configured.isVisible({ timeout: 1_500 }).catch(() => false)) {
-      await configured.click({ timeout: config.timeouts.elementWait });
+      await ctx.human.clickSafe(configured, { timeout: config.timeouts.elementWait });
     } else {
-      await fallbackMan.click({ timeout: config.timeouts.elementWait });
+      await ctx.human.clickSafe(fallbackMan, { timeout: config.timeouts.elementWait });
     }
 
-    await page.getByRole("button", { name: PRIMARY_NEXT_NAME }).first().click({ timeout: config.timeouts.elementWait });
+    await ctx.human.clickSafe(
+      page.getByRole("button", { name: PRIMARY_NEXT_NAME }).first(),
+      { timeout: config.timeouts.elementWait },
+    );
     await page.waitForLoadState("domcontentloaded", { timeout: config.timeouts.pageLoad });
+    await ctx.human.pause(400, 1_200);
   } catch (error) {
     throw toTechnicalError(error, "ELEMENT_NOT_FOUND", "Falha ao selecionar gênero");
   }
@@ -293,11 +297,14 @@ async function openEarnCityViaMarketingNav(ctx: RealStepContext): Promise<boolea
 
   async function clickAndSettle(target: ReturnType<Page["locator"]>): Promise<void> {
     // noWaitAfter: proxy lento em drivers.uber.com / deliver trava o click() padrão.
-    await target.click({ timeout: config.timeouts.elementWait, noWaitAfter: true });
+    await ctx.human.clickSafe(target, {
+      timeout: config.timeouts.elementWait,
+      noWaitAfter: true,
+    });
     await page
       .waitForLoadState("domcontentloaded", { timeout: Math.min(config.timeouts.pageLoad, 30_000) })
       .catch(() => undefined);
-    await page.waitForTimeout(900);
+    await ctx.human.pause(700, 1_600);
   }
 
   async function trySignupCtas(): Promise<boolean> {
@@ -376,8 +383,11 @@ async function openEarnCityViaMarketingNav(ctx: RealStepContext): Promise<boolea
 
   const earnVisible = await earnNav.first().isVisible({ timeout: 10_000 }).catch(() => false);
   if (earnVisible) {
-    await earnNav.first().click({ timeout: config.timeouts.elementWait, noWaitAfter: true });
-    await page.waitForTimeout(1_200);
+    await ctx.human.clickSafe(earnNav.first(), {
+      timeout: config.timeouts.elementWait,
+      noWaitAfter: true,
+    });
+    await ctx.human.pause(900, 2_000);
     await ctx.recordStep("EARNING_LOCATION_EARN_NAV_CLICKED", { url: page.url() });
     await dismissEarnEducationInterstitialIfPresent(page, config.timeouts.elementWait);
     if (await cityVisible(20_000)) return true;
@@ -454,15 +464,11 @@ export async function confirmEarningLocationStep(ctx: RealStepContext): Promise<
       .first();
 
     await cityInput.waitFor({ state: "visible", timeout: config.timeouts.elementWait });
-    await cityInput.click({ timeout: config.timeouts.elementWait });
-    // Limpa valor pré-preenchido (IP).
-    await cityInput.fill("");
-    await cityInput.press("Control+A").catch(() => undefined);
-    await cityInput.press("Meta+A").catch(() => undefined);
-    await cityInput.press("Backspace").catch(() => undefined);
-    await page.waitForTimeout(250);
-    await cityInput.pressSequentially(city, { delay: 40 });
-    await page.waitForTimeout(1_000);
+    await ctx.human.type(cityInput, city, {
+      timeout: config.timeouts.elementWait,
+      delayMs: { min: 40, max: 130 },
+    });
+    await ctx.human.pause(700, 1_400);
 
     const cityCore = city.split(",")[0]!.trim();
     const cityEsc = city.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -484,8 +490,8 @@ export async function confirmEarningLocationStep(ctx: RealStepContext): Promise<
         `Autocomplete de cidade não listou opção para "${city}"`,
       );
     }
-    await option.first().click({ timeout: config.timeouts.elementWait });
-    await page.waitForTimeout(600);
+    await ctx.human.clickSafe(option.first(), { timeout: config.timeouts.elementWait });
+    await ctx.human.pause(400, 1_000);
 
     // Confirma que a sugestão fechou / valor ficou selecionado.
     await page
@@ -552,7 +558,7 @@ export async function confirmEarningLocationStep(ctx: RealStepContext): Promise<
       );
     }
 
-    await nextButton.click({ timeout: config.timeouts.elementWait });
+    await ctx.human.clickSafe(nextButton, { timeout: config.timeouts.elementWait });
     await page.waitForLoadState("domcontentloaded", { timeout: config.timeouts.pageLoad });
   } catch (error) {
     if (error instanceof AutomationPauseSignal) throw error;
@@ -645,12 +651,12 @@ export async function selectServiceTypeStep(ctx: RealStepContext): Promise<void>
       .getByText(new RegExp(`^${config.serviceTypeLabel}$`, "i"))
       .first();
     await deliveryCard.waitFor({ state: "visible", timeout: config.timeouts.elementWait });
-    await deliveryCard.click({ timeout: config.timeouts.elementWait });
-    await page.waitForTimeout(800);
+    await ctx.human.clickSafe(deliveryCard, { timeout: config.timeouts.elementWait });
+    await ctx.human.pause(500, 1_200);
 
     const nextButton = page.getByRole("button", { name: PRIMARY_NEXT_NAME }).first();
     if (await nextButton.isVisible({ timeout: 3_000 }).catch(() => false)) {
-      await nextButton.click({ timeout: config.timeouts.elementWait });
+      await ctx.human.clickSafe(nextButton, { timeout: config.timeouts.elementWait });
     }
     await page.waitForLoadState("domcontentloaded", { timeout: config.timeouts.pageLoad }).catch(() => undefined);
     await page.waitForTimeout(1_200);

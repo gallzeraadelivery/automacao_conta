@@ -1,0 +1,13 @@
+{
+  "name": "@uber-automation/mobile-shell",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Electron BrowserWindow emulando Android/iPhone para automação Uber",
+  "main": "main.cjs",
+  "scripts": {
+    "start": "electron ."
+  },
+  "dependencies": {
+    "electron": "^33.2.1"
+  }
+}

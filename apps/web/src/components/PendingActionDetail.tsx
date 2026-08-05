@@ -124,7 +124,7 @@ export function PendingActionDetail({ id }: { id: string }) {
     setDownloadingCookies(true);
     const ok = await apiDownload(
       `/api/applicants/${item.applicantId}/uber-cookies`,
-      `uber-cookies-${item.applicantId}.json`,
+      `adspower-cookies-${item.applicantId}.json`,
     );
     setDownloadingCookies(false);
     if (!ok) {

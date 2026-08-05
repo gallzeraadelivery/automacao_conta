@@ -2,10 +2,11 @@ import type { Page } from "playwright";
 import type { IEmailVerificationWorker } from "@uber-automation/email-service";
 import type { AutomationContext } from "../../types";
 import type { RealUberConfig } from "./realConfig";
+import type { HumanInteraction } from "./humanize";
 
 /**
- * Contexto passado a cada step do fluxo REAL (drivers.uber.com). Mais
- * enxuto que `StepContext<TConfig,TSelectors>` (usado pelo fluxo do mock)
+ * Contexto passado a cada step do fluxo REAL (uber.com → Earn → Delivery).
+ * Mais enxuto que `StepContext<TConfig,TSelectors>` (usado pelo fluxo do mock)
  * porque este fluxo não faz login numa conta existente (não precisa de
  * `vault`/`platformCredential` - a senha é gerada, não descriptografada) e
  * nunca chega perto de uma página classificável por `detector` (a
@@ -16,6 +17,8 @@ export interface RealStepContext {
   context: AutomationContext;
   config: RealUberConfig;
   emailWorker: IEmailVerificationWorker;
+  /** Mouse/timing humanizados — seed único por execução do adaptador. */
+  human: HumanInteraction;
   recordStep(step: string, metadata?: Record<string, unknown>): Promise<void>;
   /**
    * Instantâneo em que o e-mail/telefone foi submetido na Uber (início da

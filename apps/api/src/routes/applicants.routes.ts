@@ -10,10 +10,13 @@ import {
   listApplicants,
   getApplicantById,
   startAutomation,
+  startAutomationBatch,
   deleteApplicant,
   getUberCookiesExport,
   openManualBrowser,
   closeManualBrowser,
+  stopAutomation,
+  stopAllAutomations,
 } from "../services/applicants.service";
 import { validateEmailListImport, importEmailList } from "../services/emailListImport.service";
 import { logAudit } from "../services/auditLog.service";
@@ -128,6 +131,66 @@ applicantsRouter.get("/", async (req, res, next) => {
   }
 });
 
+const startAutomationBatchSchema = z.object({
+  platformPassword: z.string().min(1, "Informe a senha de login da plataforma"),
+  applicantIds: z.array(z.string().uuid()).optional(),
+});
+
+/**
+ * Start em massa: rodízio dos proxies ACTIVE; fila processa conforme
+ * WORKER_CONCURRENCY (recomendado = 1).
+ */
+applicantsRouter.post(
+  "/start-batch",
+  requireRole("admin", "operator"),
+  async (req, res, next) => {
+    try {
+      const input = startAutomationBatchSchema.parse(req.body);
+      const result = await startAutomationBatch(req.user!.companyId, input);
+
+      await logAudit({
+        companyId: req.user!.companyId,
+        operatorId: req.user!.operatorId,
+        action: "automation_batch_start_requested",
+        metadata: {
+          enqueued: result.enqueued.length,
+          skipped: result.skipped.length,
+          activeProxyCount: result.activeProxyCount,
+          applicantIds: result.enqueued.map((e) => e.applicantId),
+        },
+      });
+
+      return res.status(202).json({ success: true, data: result });
+    } catch (error) {
+      return next(error);
+    }
+  },
+);
+
+/**
+ * Para todas as automações da empresa: drena a fila e sinaliza browsers ativos.
+ */
+applicantsRouter.post(
+  "/stop-all",
+  requireRole("admin", "operator"),
+  async (req, res, next) => {
+    try {
+      const result = await stopAllAutomations(req.user!.companyId);
+
+      await logAudit({
+        companyId: req.user!.companyId,
+        operatorId: req.user!.operatorId,
+        action: "automation_stop_all_requested",
+        metadata: result,
+      });
+
+      return res.json({ success: true, data: result });
+    } catch (error) {
+      return next(error);
+    }
+  },
+);
+
 applicantsRouter.get("/:id", async (req, res, next) => {
   try {
     const applicant = await getApplicantById(req.user!.companyId, req.params.id);
@@ -162,8 +225,10 @@ applicantsRouter.delete("/:id", requireRole("admin", "operator"), async (req, re
 });
 
 /**
- * Download dos cookies Uber persistidos (JSON Playwright) - para reabrir
- * a sessão no browser após a conta criada.
+ * Download cookies Uber para AdsPower.
+ * - default / ?format=json → JSON array compacto (colar no campo Cookie)
+ * - ?format=netscape → Netscape cookie file (alternativa)
+ * Cada arquivo é da sessão daquele motorista (perfil isolado).
  */
 applicantsRouter.get(
   "/:id/uber-cookies",
@@ -174,6 +239,7 @@ applicantsRouter.get(
       if (!applicantId) {
         throw new HttpError(400, "MISSING_ID", "ID do motorista ausente na URL");
       }
+      const format = String(req.query.format ?? "json").toLowerCase();
       const exported = await getUberCookiesExport(req.user!.companyId, applicantId);
 
       await logAudit({
@@ -181,16 +247,27 @@ applicantsRouter.get(
         operatorId: req.user!.operatorId,
         applicantId,
         action: "download_uber_cookies",
-        metadata: { cookieCount: exported.cookieCount },
+        metadata: { cookieCount: exported.cookieCount, format },
       });
 
       const safeName = exported.externalId.replace(/[^a-zA-Z0-9._-]/g, "_");
+
+      if (format === "netscape" || format === "txt") {
+        res.setHeader("Content-Type", "text/plain; charset=utf-8");
+        res.setHeader(
+          "Content-Disposition",
+          `attachment; filename="adspower-cookies-${safeName}.txt"`,
+        );
+        return res.status(200).send(exported.netscapeCookies);
+      }
+
       res.setHeader("Content-Type", "application/json; charset=utf-8");
       res.setHeader(
         "Content-Disposition",
-        `attachment; filename="uber-cookies-${safeName}.json"`,
+        `attachment; filename="adspower-cookies-${safeName}.json"`,
       );
-      return res.status(200).send(JSON.stringify(exported, null, 2));
+      // Compacto (1 linha): colar no campo Cookie do AdsPower sem quebrar.
+      return res.status(200).send(JSON.stringify(exported.adsPowerCookies));
     } catch (error) {
       return next(error);
     }
@@ -222,6 +299,35 @@ applicantsRouter.post(
       });
 
       return res.status(202).json({ success: true, data: result });
+    } catch (error) {
+      return next(error);
+    }
+  },
+);
+
+/**
+ * Para a automação de um motorista (remove da fila + fecha Chromium ativo).
+ */
+applicantsRouter.post(
+  "/:id/stop-automation",
+  requireRole("admin", "operator"),
+  async (req, res, next) => {
+    try {
+      const applicantId = req.params.id;
+      if (!applicantId) {
+        throw new HttpError(400, "MISSING_ID", "ID do motorista ausente na URL");
+      }
+      const result = await stopAutomation(req.user!.companyId, applicantId);
+
+      await logAudit({
+        companyId: req.user!.companyId,
+        operatorId: req.user!.operatorId,
+        applicantId,
+        action: "automation_stop_requested",
+        metadata: result,
+      });
+
+      return res.json({ success: true, data: result });
     } catch (error) {
       return next(error);
     }

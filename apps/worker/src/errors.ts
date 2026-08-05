@@ -58,3 +58,11 @@ export class TechnicalAutomationError extends Error {
     this.reason = reason;
   }
 }
+
+/** Operador clicou Parar / Parar todos — não retentar. */
+export class AutomationStoppedError extends Error {
+  constructor(message = "Automação interrompida pelo operador") {
+    super(message);
+    this.name = "AutomationStoppedError";
+  }
+}

@@ -10,7 +10,7 @@ import {
   type ConcurrencyLimiter,
   type ConcurrencyRequest,
 } from "./concurrencyLimiter";
-import { NonRetryableAutomationError, TechnicalAutomationError } from "./errors";
+import { NonRetryableAutomationError, TechnicalAutomationError, AutomationStoppedError } from "./errors";
 import { MAX_ATTEMPTS } from "./backoff";
 import { AUTOMATION_STEPS, type AutomationJob } from "./automationJob.types";
 
@@ -51,6 +51,8 @@ export interface ApplicantStatusRepository {
   markFailed?(applicantId: string, reason: string): Promise<void>;
   /** REFUSED / Internal Server Error: FAILED + soft-delete do e-mail. */
   markDiscarded?(applicantId: string, emailAccountId: string, reason: string): Promise<void>;
+  /** Operador parou: volta para READY_TO_START (pode reiniciar depois). */
+  markStopped?(applicantId: string): Promise<void>;
 }
 
 /**
@@ -210,6 +212,27 @@ async function handleJobError(
   deps: ProcessAutomationJobDeps,
 ): Promise<void> {
   const data = job.data;
+
+  if (error instanceof AutomationStoppedError) {
+    job.discard();
+    await deps.auditLogger.log({
+      companyId: data.companyId,
+      applicantId: data.applicantId,
+      action: "automation_job_stopped",
+      metadata: {
+        step: data.currentStep,
+        reason: "STOPPED_BY_OPERATOR",
+        retryable: false,
+        detail: error.message,
+      },
+    });
+    if (deps.applicantStatusRepository?.markStopped) {
+      await deps.applicantStatusRepository.markStopped(data.applicantId);
+    } else {
+      await deps.applicantStatusRepository?.markFailed?.(data.applicantId, "STOPPED");
+    }
+    return;
+  }
 
   if (error instanceof NonRetryableAutomationError || error instanceof SecurityChallengeError) {
     job.discard();

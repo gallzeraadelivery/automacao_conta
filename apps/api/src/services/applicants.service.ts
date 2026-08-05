@@ -18,9 +18,12 @@ import { HttpError } from "../middleware/errorHandler";
 import { createCredentialVault } from "../lib/credentialVault";
 import {
   cancelAutomationJobsForApplicant,
+  clearAutomationStopAll,
   enqueueOpenManualBrowserJob,
   enqueueStartAutomationJob,
   signalCloseManualBrowser,
+  stopAllAutomationsForCompany,
+  stopAutomationForApplicant,
 } from "../lib/automationQueue";
 import { env } from "../env";
 import { defaultBrowserProfilesRoot, MONOREPO_ROOT, resolveApplicantProfileDir } from "../lib/storagePaths";
@@ -225,6 +228,27 @@ export interface StartAutomationInput {
   platformPassword: string;
 }
 
+/** Status elegíveis para start em lote (não inclui AWAITING_HUMAN_ACTION). */
+const BATCH_STARTABLE_STATUSES = [
+  "NEW",
+  "CONSENT_PENDING",
+  "READY_TO_START",
+  "FAILED",
+  "CANCELLED",
+] as const;
+
+export interface StartAutomationBatchInput {
+  platformPassword: string;
+  /** Se vazio, enfileira todos os elegíveis da empresa. */
+  applicantIds?: string[];
+}
+
+export interface StartAutomationBatchResult {
+  enqueued: Array<{ applicantId: string; fullName: string; jobId: string; proxyId: string }>;
+  skipped: Array<{ applicantId: string; fullName?: string; reason: string }>;
+  activeProxyCount: number;
+}
+
 /**
  * Enfileira a etapa RUN_ADMINISTRATIVE_FLOW (Fase 7) para este motorista:
  * criptografa a senha de login da plataforma (nunca gravada em texto puro,
@@ -244,7 +268,7 @@ export async function startAutomation(
   }
 
   const [emailAccount] = await db
-    .select({ id: emailAccounts.id })
+    .select({ id: emailAccounts.id, deletedAt: emailAccounts.deletedAt })
     .from(emailAccounts)
     .where(and(eq(emailAccounts.companyId, companyId), eq(emailAccounts.applicantId, applicantId)))
     .limit(1);
@@ -253,6 +277,13 @@ export async function startAutomation(
       400,
       "EMAIL_ACCOUNT_REQUIRED",
       "Cadastre o e-mail de verificação deste motorista antes de iniciar a automação",
+    );
+  }
+  if (emailAccount.deletedAt) {
+    throw new HttpError(
+      400,
+      "EMAIL_DISCARDED",
+      "E-mail deste motorista foi descartado (REFUSED) — não reiniciar",
     );
   }
 
@@ -271,6 +302,9 @@ export async function startAutomation(
     { applicantId },
     applicantId,
   );
+
+  // Novo start cancela um “Parar todos” ainda vigente.
+  await clearAutomationStopAll(companyId);
 
   const jobId = await enqueueStartAutomationJob({
     companyId,
@@ -305,6 +339,135 @@ export async function startAutomation(
     .where(eq(applicants.id, applicantId));
 
   return { jobId };
+}
+
+/**
+ * Start em massa: enfileira N motoristas com rodízio dos proxies ACTIVE.
+ * A concorrência real fica no worker (WORKER_CONCURRENCY=1 = um por vez).
+ */
+export async function startAutomationBatch(
+  companyId: string,
+  input: StartAutomationBatchInput,
+): Promise<StartAutomationBatchResult> {
+  const password = input.platformPassword?.trim();
+  if (!password) {
+    throw new HttpError(400, "PASSWORD_REQUIRED", "Informe a senha de login da plataforma");
+  }
+
+  const requestedIds = input.applicantIds?.filter(Boolean) ?? [];
+  if (requestedIds.length === 0) {
+    throw new HttpError(
+      400,
+      "APPLICANT_IDS_REQUIRED",
+      "Informe applicantIds para o lote (selecione motoristas no painel)",
+    );
+  }
+
+  const activeProxies = await db
+    .select({ id: proxyConfigs.id })
+    .from(proxyConfigs)
+    .where(and(eq(proxyConfigs.companyId, companyId), eq(proxyConfigs.status, "ACTIVE")))
+    .orderBy(proxyConfigs.port, proxyConfigs.id);
+  if (activeProxies.length === 0) {
+    throw new HttpError(
+      400,
+      "NO_ACTIVE_PROXY",
+      "Cadastre e teste ao menos um proxy ACTIVE antes do start em lote",
+    );
+  }
+
+  await clearAutomationStopAll(companyId);
+
+  const conditions = [
+    eq(applicants.companyId, companyId),
+    inArray(applicants.id, requestedIds),
+  ];
+
+  const rows = await db
+    .select({
+      id: applicants.id,
+      fullName: applicants.fullName,
+      status: applicants.status,
+      pauseReason: applicants.pauseReason,
+      emailId: emailAccounts.id,
+      emailDeletedAt: emailAccounts.deletedAt,
+    })
+    .from(applicants)
+    .leftJoin(emailAccounts, eq(emailAccounts.applicantId, applicants.id))
+    .where(and(...conditions))
+    .orderBy(applicants.createdAt);
+
+  const enqueued: StartAutomationBatchResult["enqueued"] = [];
+  const skipped: StartAutomationBatchResult["skipped"] = [];
+  let proxyIndex = 0;
+
+  for (const row of rows) {
+    if (!(BATCH_STARTABLE_STATUSES as readonly string[]).includes(row.status)) {
+      skipped.push({
+        applicantId: row.id,
+        fullName: row.fullName,
+        reason: `status ${row.status} não elegível para lote`,
+      });
+      continue;
+    }
+    if (row.pauseReason === "REFUSED") {
+      skipped.push({
+        applicantId: row.id,
+        fullName: row.fullName,
+        reason: "REFUSED (e-mail descartado)",
+      });
+      continue;
+    }
+    if (!row.emailId) {
+      skipped.push({
+        applicantId: row.id,
+        fullName: row.fullName,
+        reason: "sem e-mail cadastrado",
+      });
+      continue;
+    }
+    if (row.emailDeletedAt) {
+      skipped.push({
+        applicantId: row.id,
+        fullName: row.fullName,
+        reason: "e-mail soft-deleted",
+      });
+      continue;
+    }
+
+    const proxyId = activeProxies[proxyIndex % activeProxies.length]!.id;
+    proxyIndex += 1;
+
+    try {
+      const { jobId } = await startAutomation(companyId, row.id, {
+        proxyId,
+        platformPassword: password,
+      });
+      enqueued.push({
+        applicantId: row.id,
+        fullName: row.fullName,
+        jobId,
+        proxyId,
+      });
+    } catch (error) {
+      skipped.push({
+        applicantId: row.id,
+        fullName: row.fullName,
+        reason: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  if (requestedIds.length > 0) {
+    const found = new Set(rows.map((r) => r.id));
+    for (const id of requestedIds) {
+      if (!found.has(id)) {
+        skipped.push({ applicantId: id, reason: "motorista não encontrado" });
+      }
+    }
+  }
+
+  return { enqueued, skipped, activeProxyCount: activeProxies.length };
 }
 
 export async function getApplicantStatusDistribution(companyId: string) {
@@ -384,12 +547,109 @@ export interface UberCookiesExport {
   fullName: string;
   cookieCount: number;
   cookies: unknown[];
+  /** Array pronto para colar no AdsPower (JSON / Cookie field). */
+  adsPowerCookies: AdsPowerCookie[];
+  /** Netscape HTTP Cookie File — alternativa se o JSON falhar no AdsPower. */
+  netscapeCookies: string;
   exportedAt: string;
 }
 
 /**
+ * Formato do exemplo oficial AdsPower Bulk Create:
+ * name, value, domain, path, httpOnly, secure, session, expires, sameSite
+ * (sem expirationDate / hostOnly / storeId).
+ */
+export interface AdsPowerCookie {
+  name: string;
+  value: string;
+  domain: string;
+  path: string;
+  httpOnly: boolean;
+  secure: boolean;
+  session: boolean;
+  expires: number;
+  sameSite: "unspecified" | "lax" | "strict";
+}
+
+function toAdsPowerSameSite(raw: unknown): AdsPowerCookie["sameSite"] {
+  const v = String(raw ?? "Lax").toLowerCase();
+  if (v === "strict") return "strict";
+  if (v === "lax") return "lax";
+  // None / no_restriction → unspecified (exemplo oficial AdsPower)
+  return "unspecified";
+}
+
+function toUnixExpires(raw: unknown): { expires: number; session: boolean } {
+  const now = Math.floor(Date.now() / 1000);
+  if (typeof raw === "number" && Number.isFinite(raw) && raw > 0) {
+    // Playwright às vezes devolve ms; AdsPower quer segundos.
+    const sec = raw > 1e12 ? Math.floor(raw / 1000) : Math.floor(raw);
+    if (sec > now) return { expires: sec, session: false };
+  }
+  // Sessão: exemplo AdsPower manda session:true COM expires preenchido.
+  return { expires: now + 60 * 60 * 24 * 30, session: true };
+}
+
+/**
+ * Converte cookies Playwright → JSON AdsPower (campos do exemplo oficial).
+ */
+export function toAdsPowerCookies(raw: unknown[]): AdsPowerCookie[] {
+  const out: AdsPowerCookie[] = [];
+  const seen = new Set<string>();
+  for (const item of raw) {
+    if (!item || typeof item !== "object") continue;
+    const c = item as Record<string, unknown>;
+    const name = typeof c.name === "string" ? c.name : "";
+    const value = typeof c.value === "string" ? c.value : "";
+    let domain = typeof c.domain === "string" ? c.domain.trim() : "";
+    if (!name || !domain) continue;
+
+    // AdsPower costuma preferir domínio com ponto para cookies de site.
+    if (!domain.startsWith(".") && domain.split(".").length >= 2) {
+      // mantém host-only (auth.uber.com) sem forçar ponto — só limpa espaços
+    }
+
+    const pathValue = typeof c.path === "string" && c.path.startsWith("/") ? c.path : "/";
+    const { expires, session } = toUnixExpires(c.expires);
+    const key = `${domain}|${pathValue}|${name}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+
+    out.push({
+      name,
+      value,
+      domain,
+      path: pathValue,
+      httpOnly: Boolean(c.httpOnly),
+      secure: Boolean(c.secure),
+      session,
+      expires,
+      sameSite: toAdsPowerSameSite(c.sameSite),
+    });
+  }
+  return out;
+}
+
+/** Netscape HTTP Cookie File (também aceito pelo AdsPower). */
+export function toNetscapeCookies(raw: unknown[]): string {
+  const lines = ["# Netscape HTTP Cookie File", "# https://curl.haxx.se/rfc/cookie_spec.html", ""];
+  for (const row of toAdsPowerCookies(raw)) {
+    const includeSubdomains = row.domain.startsWith(".") ? "TRUE" : "FALSE";
+    const domain = row.domain.startsWith(".") ? row.domain : row.domain;
+    const secure = row.secure ? "TRUE" : "FALSE";
+    // Netscape: domain \t flag \t path \t secure \t expires \t name \t value
+    lines.push(
+      [domain, includeSubdomains, row.path, secure, String(row.expires), row.name, row.value].join(
+        "\t",
+      ),
+    );
+  }
+  return lines.join("\n") + "\n";
+}
+
+/**
  * Lê cookies Uber persistidos pelo worker após o job (Playwright JSON).
- * Útil para reabrir a sessão / importar no browser.
+ * Útil para reabrir a sessão / importar no AdsPower.
  */
 export async function getUberCookiesExport(
   companyId: string,
@@ -425,12 +685,16 @@ export async function getUberCookiesExport(
     );
   }
 
+  const adsPowerCookies = toAdsPowerCookies(cookies);
+
   return {
     applicantId: applicant.id,
     externalId: applicant.externalId,
     fullName: applicant.fullName,
-    cookieCount: cookies.length,
+    cookieCount: adsPowerCookies.length,
     cookies,
+    adsPowerCookies,
+    netscapeCookies: toNetscapeCookies(cookies),
     exportedAt: new Date().toISOString(),
   };
 }
@@ -521,4 +785,68 @@ export async function closeManualBrowser(
     stopSignaled: result.stopSignaled,
     removedQueuedJobs: result.removedQueuedJobs,
   };
+}
+
+/** Para a automação de um motorista (fila + Chromium ativo). */
+export async function stopAutomation(
+  companyId: string,
+  applicantId: string,
+): Promise<{ stopSignaled: boolean; removedQueuedJobs: number }> {
+  const applicant = await getApplicantById(companyId, applicantId);
+  if (!applicant) {
+    throw new HttpError(404, "NOT_FOUND", "Motorista não encontrado");
+  }
+
+  const result = await stopAutomationForApplicant(applicantId);
+
+  if (applicant.status === "IN_PROGRESS") {
+    await db
+      .update(applicants)
+      .set({
+        status: "READY_TO_START",
+        pauseReason: null,
+        pausedAt: null,
+        currentStep: null,
+        updatedAt: new Date(),
+      })
+      .where(and(eq(applicants.id, applicantId), eq(applicants.companyId, companyId)));
+  }
+
+  return result;
+}
+
+/** Para todas as automações da empresa (drena fila + sinaliza browsers ativos). */
+export async function stopAllAutomations(
+  companyId: string,
+): Promise<{
+  stopAllSignaled: boolean;
+  removedQueuedJobs: number;
+  applicantsSignaled: number;
+  resetToReady: number;
+}> {
+  const inProgress = await db
+    .select({ id: applicants.id })
+    .from(applicants)
+    .where(and(eq(applicants.companyId, companyId), eq(applicants.status, "IN_PROGRESS")));
+
+  const ids = inProgress.map((r) => r.id);
+  const result = await stopAllAutomationsForCompany(companyId, ids);
+
+  let resetToReady = 0;
+  if (ids.length > 0) {
+    const updated = await db
+      .update(applicants)
+      .set({
+        status: "READY_TO_START",
+        pauseReason: null,
+        pausedAt: null,
+        currentStep: null,
+        updatedAt: new Date(),
+      })
+      .where(and(eq(applicants.companyId, companyId), inArray(applicants.id, ids)))
+      .returning({ id: applicants.id });
+    resetToReady = updated.length;
+  }
+
+  return { ...result, resetToReady };
 }

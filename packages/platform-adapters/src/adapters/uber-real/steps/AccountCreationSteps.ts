@@ -5,6 +5,7 @@ import { maskCode } from "@uber-automation/security";
 import { buildPlaceholderPassword, buildPlaceholderPhone, splitFullName } from "../nameUtils";
 import type { RealStepContext } from "../realStepContext";
 import type { Page } from "playwright";
+import { dismissCookieBannerIfPresent } from "./PreferencesSteps";
 
 /**
  * Botão primário de avanço na Uber real. A UI oscila entre "Continue",
@@ -13,8 +14,9 @@ import type { Page } from "playwright";
  */
 const PRIMARY_NEXT_NAME = /^(continuar|continue|next|pr[oó]ximo)(\s*→)?$/i;
 
-async function clickPrimaryNext(page: Page, timeout: number): Promise<void> {
-  await page.getByRole("button", { name: PRIMARY_NEXT_NAME }).first().click({ timeout });
+async function clickPrimaryNext(ctx: RealStepContext, timeout: number): Promise<void> {
+  const btn = ctx.page.getByRole("button", { name: PRIMARY_NEXT_NAME }).first();
+  await ctx.human.clickSafe(btn, { timeout });
 }
 
 /**
@@ -27,21 +29,48 @@ async function pauseIfUberSecurityPuzzle(page: Page, timeoutMs = 3_000): Promise
   const puzzle = page
     .getByRole("heading", { name: /protecting your account/i })
     .or(page.getByRole("button", { name: /^start puzzle$/i }))
-    .or(page.getByText(/solve this puzzle so we know you are a real person/i));
+    .or(page.getByText(/solve this puzzle so we know you are a real person/i))
+    .or(page.getByText(/please solve this puzzle/i))
+    .or(page.getByText(/protecting your account/i))
+    .or(page.locator('iframe[src*="arkoselabs"], iframe[src*="funcaptcha"], iframe[id*="arkose" i]'))
+    .or(page.locator('[data-testid*="arkose" i], #arkose, #arkose-challenge'));
 
   if (await puzzle.first().isVisible({ timeout: timeoutMs }).catch(() => false)) {
     throw new AutomationPauseSignal("CAPTCHA", {
       type: "CAPTCHA",
-      provider: "UNKNOWN",
+      provider: "ARKOSE",
+      confidence: "HIGH",
+    });
+  }
+
+  // Fallback: texto no DOM (modal pode estar em shadow / sem role acessível).
+  const hasPuzzleText = await page
+    .evaluate(() => {
+      const t = (document.body?.innerText || "").toLowerCase();
+      return (
+        t.includes("protecting your account") ||
+        t.includes("start puzzle") ||
+        t.includes("solve this puzzle")
+      );
+    })
+    .catch(() => false);
+  if (hasPuzzleText) {
+    throw new AutomationPauseSignal("CAPTCHA", {
+      type: "CAPTCHA",
+      provider: "ARKOSE",
       confidence: "HIGH",
     });
   }
 }
 
+/** Fatias curtas de IMAP com checagem de puzzle entre elas (early-stop Arkose). */
+const IMAP_POLL_CHUNK_MS = 12_000;
+
 /**
  * Modal "Request failed" / "Unable to process this request" / "Start Over".
  * É erro transitório da Uber (não CAPTCHA) - falha técnica retentável, sem
- * varrer IMAP à toa.
+ * varrer IMAP à toa. Clica Start Over quando visível para limpar o modal
+ * antes da rotação de sessão.
  */
 async function failIfUberRequestFailed(page: Page, timeoutMs = 1_500): Promise<void> {
   const failed = page
@@ -50,6 +79,10 @@ async function failIfUberRequestFailed(page: Page, timeoutMs = 1_500): Promise<v
     .or(page.getByRole("button", { name: /^start over$/i }));
 
   if (await failed.first().isVisible({ timeout: timeoutMs }).catch(() => false)) {
+    const startOver = page.getByRole("button", { name: /^start over$/i });
+    if (await startOver.isVisible({ timeout: 800 }).catch(() => false)) {
+      await startOver.click({ timeout: 3_000 }).catch(() => undefined);
+    }
     throw new AutomationTechnicalError(
       "LOAD_ERROR",
       'Uber exibiu "Request failed" / Unable to process this request - tente novamente',
@@ -243,16 +276,38 @@ async function waitAfterPhoneSubmit(page: Page, timeout: number): Promise<AfterP
 const PHONE_PLACEHOLDER_IN_SESSION_ATTEMPTS = 3;
 
 /**
- * Passo 1 (PDF): abre o portal de cadastro de motorista.
+ * Passo 1: abre o cadastro Delivery pelo caminho de marketing.
  *
- * 1) Tenta `drivers.uber.com`.
- * 2) Se falhar (timeout/proxy/chrome-error) ou não parecer signup de
- *    driver/delivery → fallback: uber.com → Earn → Delivery.
- * 3) Se ambos falharem → LOAD_ERROR (worker rotaciona sessão/proxy).
+ * 1) Primário: www.uber.com → cookies → Menu → Earn → Deliver → CTA signup.
+ * 2) Se falhar → deep link `/us/en/deliver/` + CTA.
+ * 3) Se ainda falhar → fallback `drivers.uber.com`.
+ * 4) Se ambos falharem → LOAD_ERROR (worker rotaciona sessão/proxy).
  */
 export async function openDriversPortal(ctx: RealStepContext): Promise<void> {
   const { page, config } = ctx;
-  let driversNavError: string | undefined;
+  let earnError: string | undefined;
+
+  try {
+    await enterViaEarnDelivery(ctx);
+  } catch (error) {
+    earnError = error instanceof Error ? error.message.slice(0, 240) : String(error);
+    await ctx.recordStep("PORTAL_EARN_NAV_FAILED", {
+      error: earnError,
+      url: page.url(),
+    });
+  }
+
+  const onChromeError = /chrome-error:|chromewebdata/i.test(page.url());
+  if (!earnError && !onChromeError && (await looksLikeDriverSignupEntry(page))) {
+    // enterViaEarnDelivery já registra PORTAL_OPENED via=earn_delivery
+    return;
+  }
+
+  await ctx.recordStep("PORTAL_WRONG_FLOW", {
+    url: page.url(),
+    earnError,
+    next: "drivers_uber_com_fallback",
+  });
 
   try {
     await page.goto(config.driversBaseUrl, {
@@ -260,31 +315,9 @@ export async function openDriversPortal(ctx: RealStepContext): Promise<void> {
       waitUntil: "domcontentloaded",
     });
   } catch (error) {
-    driversNavError = error instanceof Error ? error.message.slice(0, 240) : String(error);
-    await ctx.recordStep("PORTAL_DRIVERS_NAV_FAILED", {
-      error: driversNavError,
-      url: page.url(),
-    });
-  }
-
-  const onChromeError = /chrome-error:|chromewebdata/i.test(page.url());
-  if (!driversNavError && !onChromeError && (await looksLikeDriverSignupEntry(page))) {
-    await ctx.recordStep("PORTAL_OPENED", { via: "drivers.uber.com" });
-    return;
-  }
-
-  await ctx.recordStep("PORTAL_WRONG_FLOW", {
-    url: page.url(),
-    driversNavError,
-    next: "earn_delivery_fallback",
-  });
-
-  try {
-    await enterViaEarnDelivery(ctx);
-  } catch (error) {
     throw new AutomationTechnicalError(
       "LOAD_ERROR",
-      `drivers.uber.com e Earn→Delivery falharam (rede/proxy): ${
+      `Earn→Delivery e drivers.uber.com falharam (rede/proxy): ${
         error instanceof Error ? error.message.slice(0, 160) : String(error)
       }`,
     );
@@ -293,12 +326,14 @@ export async function openDriversPortal(ctx: RealStepContext): Promise<void> {
   if (/chrome-error:|chromewebdata/i.test(page.url()) || !(await looksLikeDriverSignupEntry(page))) {
     throw new AutomationTechnicalError(
       "LOAD_ERROR",
-      "Portal de signup não carregou após Earn→Delivery (chrome-error/proxy)",
+      "Portal de signup não carregou após Earn→Delivery nem drivers.uber.com (chrome-error/proxy)",
     );
   }
+
+  await ctx.recordStep("PORTAL_OPENED", { via: "drivers.uber.com", fallback: true });
 }
 
-/** Sinais de que estamos no caminho de cadastro driver/delivery (não rider). */
+/** Sinais de que estamos no FORM de cadastro driver/delivery (não marketing). */
 async function looksLikeDriverSignupEntry(page: Page): Promise<boolean> {
   const url = page.url();
 
@@ -307,114 +342,381 @@ async function looksLikeDriverSignupEntry(page: Page): Promise<boolean> {
     return false;
   }
 
-  const signupUi = page
+  // Landing marketing (www.uber.com/…/deliver|drive) NÃO é o form — o texto
+  // "Sign up to deliver" na página gerava falso positivo.
+  if (/www\.uber\.com/i.test(url) && !/\/a\/signup/i.test(url)) {
+    return false;
+  }
+
+  const authForm = page
     .getByRole("heading", {
-      name: /phone number or email|what'?s your phone|sign up to (drive|deliver)|earn with uber|create.*account/i,
+      name: /enter your mobile number|phone number or email|what'?s your phone|what'?s your email|create your account/i,
     })
-    .or(page.getByText(/sign up to (drive|deliver)|become a (driver|delivery)/i))
+    .or(page.getByRole("button", { name: /continue with email|continuar com (o )?e-?mail/i }))
     .or(
       page.locator(
-        'input[type="email"], input[placeholder*="phone number or email" i], input[placeholder*="email" i]',
+        [
+          'input[type="email"]',
+          'input[type="tel"]',
+          'input[autocomplete="tel"]',
+          'input[autocomplete="email"]',
+          'input[placeholder*="phone number or email" i]',
+          'input[placeholder*="email" i]',
+          'input[placeholder*="+1" i]',
+        ].join(", "),
       ),
     );
 
-  if (await signupUi.first().isVisible({ timeout: 5_000 }).catch(() => false)) {
+  if (await authForm.first().isVisible({ timeout: 3_000 }).catch(() => false)) {
     return true;
   }
 
-  // Portal drivers / deliver ainda redirecionando — dá uma segunda chance ao form.
-  if (/drivers\.uber\.com|bonjour\.uber\.com|\/deliver/i.test(url)) {
+  // Portal / auth ainda redirecionando — espera curta pelo form.
+  if (/auth\.uber\.com|drivers\.uber\.com|bonjour\.uber\.com|\/a\/signup/i.test(url)) {
     await page.waitForTimeout(1_500);
-    if (await signupUi.first().isVisible({ timeout: 4_000 }).catch(() => false)) {
+    if (await authForm.first().isVisible({ timeout: 4_000 }).catch(() => false)) {
       return true;
     }
-    // Mantém true só se ainda estamos em drivers (fluxo esperado em andamento).
-    return /drivers\.uber\.com/i.test(page.url());
+    // Em drivers/auth sem form ainda: trata como entrada válida (load em curso).
+    return /auth\.uber\.com|drivers\.uber\.com/i.test(page.url());
+  }
+
+  return false;
+}
+
+/** Após CTA: espera auth/drivers; se o clique não navegou, faz goto no href. */
+async function settleSignupNavigation(
+  page: Page,
+  href: string,
+  timeoutMs: number,
+): Promise<boolean> {
+  const signupUrl = /auth\.uber\.com|drivers\.uber\.com|bonjour\.uber\.com|\/a\/signup/i;
+  try {
+    await page.waitForURL(signupUrl, { timeout: Math.min(timeoutMs, 25_000) });
+    await page.waitForLoadState("domcontentloaded", { timeout: timeoutMs }).catch(() => undefined);
+    return true;
+  } catch {
+    // clique não navegou (overlay / SPA)
+  }
+
+  const absolute = href.startsWith("http")
+    ? href
+    : href.startsWith("/")
+      ? `https://www.uber.com${href}`
+      : "";
+  if (absolute && /drivers\.uber\.com|auth\.uber\.com|\/a\/signup/i.test(absolute)) {
+    try {
+      await page.goto(absolute, { timeout: timeoutMs, waitUntil: "domcontentloaded" });
+      await page.waitForURL(signupUrl, { timeout: 15_000 }).catch(() => undefined);
+      return signupUrl.test(page.url()) || (await looksLikeDriverSignupEntry(page));
+    } catch {
+      return false;
+    }
+  }
+  return signupUrl.test(page.url());
+}
+
+/**
+ * Entrada tela a tela (mobile real, Jul/2026):
+ * 1) www.uber.com/us/en/ + dismiss cookies
+ * 2) Menu → Earn (Earn NÃO está no header mobile)
+ * 3) Deliver (dropdown/link /…/deliver/) — evita ficar em Drive
+ * 4) CTA "Sign up to deliver" / "Get started" → drivers.uber.com
+ * 5) Se Earn falhar → deep link deliverLandingUrl + mesmo CTA
+ */
+async function enterViaEarnDelivery(ctx: RealStepContext): Promise<void> {
+  const { page, config } = ctx;
+  const { timeouts } = config;
+
+  // --- Tela 1: uber.com ---
+  await page.goto(config.marketingBaseUrl, {
+    timeout: timeouts.pageLoad,
+    waitUntil: "domcontentloaded",
+  });
+  await ctx.human.pause(1_000, 2_200);
+  await dismissCookieBannerIfPresent(page, timeouts.elementWait);
+  await ctx.human.pause(400, 900);
+  await ctx.recordStep("PORTAL_SCREEN_UBER_HOME", { url: page.url() });
+
+  // --- Tela 2: Menu → Earn (mobile: Earn só no hamburger) ---
+  const entry = await openEarnFromMobileMenu(ctx);
+  if (entry === "earn" || entry === "deliver") {
+    await page.waitForLoadState("domcontentloaded", { timeout: timeouts.pageLoad }).catch(() => undefined);
+    await dismissCookieBannerIfPresent(page, timeouts.elementWait);
+    await ctx.recordStep(
+      entry === "earn" ? "PORTAL_SCREEN_EARN_OPENED" : "PORTAL_SCREEN_DELIVER_FROM_HOME",
+      { url: page.url() },
+    );
+
+    if (await looksLikeDriverSignupEntry(page)) {
+      await ctx.recordStep("PORTAL_OPENED", {
+        via: entry === "earn" ? "earn_direct_signup" : "deliver_direct_signup",
+        url: page.url(),
+      });
+      return;
+    }
+
+    // --- Tela 3: Deliver após Earn/Drive (se ainda não em Deliver) ---
+    if (entry === "earn" || !/\/deliver\/?/i.test(page.url())) {
+      const afterEarn = await decideClickAfterEarn(ctx);
+      await ctx.recordStep("PORTAL_AFTER_EARN_DECISION", afterEarn);
+      if (afterEarn.clicked) {
+        await page.waitForLoadState("domcontentloaded", { timeout: timeouts.pageLoad }).catch(() => undefined);
+        await dismissCookieBannerIfPresent(page, timeouts.elementWait);
+        await ctx.human.pause(700, 1_600);
+      }
+    }
+  } else {
+    await ctx.recordStep("PORTAL_EARN_SKIPPED_TO_DELIVER", {
+      reason: "earn_not_visible_after_menu",
+      url: page.url(),
+    });
+  }
+
+  // --- Tela 4: CTA signup Delivery ---
+  if (!(await looksLikeDriverSignupEntry(page))) {
+    const cta = await clickDeliverSignupCta(ctx);
+    if (cta.clicked) {
+      await page.waitForLoadState("domcontentloaded", { timeout: timeouts.pageLoad }).catch(() => undefined);
+      await ctx.human.pause(800, 2_000);
+      await ctx.recordStep("PORTAL_SCREEN_SIGNUP_CTA", { ...cta, url: page.url() });
+    }
+  }
+
+  // --- Fallback: landing /deliver/ conhecida ---
+  if (!(await looksLikeDriverSignupEntry(page))) {
+    await page.goto(config.deliverLandingUrl, {
+      timeout: timeouts.pageLoad,
+      waitUntil: "domcontentloaded",
+    });
+    await ctx.human.pause(700, 1_500);
+    await dismissCookieBannerIfPresent(page, timeouts.elementWait);
+    await ctx.recordStep("PORTAL_SCREEN_DELIVER_LANDING", { url: page.url() });
+
+    const cta2 = await clickDeliverSignupCta(ctx);
+    if (cta2.clicked) {
+      await page.waitForLoadState("domcontentloaded", { timeout: timeouts.pageLoad }).catch(() => undefined);
+      await ctx.human.pause(800, 2_000);
+      await ctx.recordStep("PORTAL_SCREEN_SIGNUP_CTA", { ...cta2, via: "deliver_landing", url: page.url() });
+    }
+  }
+
+  await ctx.recordStep("PORTAL_OPENED", {
+    via: entry === "earn" ? "menu_earn_deliver" : entry === "deliver" ? "home_deliver" : "deliver_landing",
+    url: page.url(),
+  });
+}
+
+/** Abre hamburger mobile e clica Earn visível (ignora links ocultos no DOM). */
+async function openEarnFromMobileMenu(
+  ctx: RealStepContext,
+): Promise<"earn" | "deliver" | false> {
+  const { page, config } = ctx;
+  const { timeouts } = config;
+
+  const menuToggle = page
+    .getByRole("button", { name: /^(menu|open navigation|abrir menu)$/i })
+    .or(page.locator('button[aria-label="Menu"], button[aria-label*="menu" i]'))
+    .first();
+
+  // No mobile Earn quase nunca está no header — abrir menu primeiro.
+  if (await menuToggle.isVisible({ timeout: 3_000 }).catch(() => false)) {
+    await ctx.human.clickSafe(menuToggle, { timeout: timeouts.elementWait });
+    await ctx.human.pause(500, 1_200);
+    await dismissCookieBannerIfPresent(page, timeouts.elementWait);
+  }
+
+  const earnCandidates = page
+    .getByRole("link", { name: /^earn$/i })
+    .or(page.getByRole("menuitem", { name: /^earn$/i }))
+    .or(page.locator('a[aria-label="Earn"], a[aria-label*="Earn" i]'));
+
+  const n = await earnCandidates.count().catch(() => 0);
+  for (let i = 0; i < Math.min(n, 8); i++) {
+    const el = earnCandidates.nth(i);
+    if (!(await el.isVisible({ timeout: 400 }).catch(() => false))) continue;
+    const href = ((await el.getAttribute("href").catch(() => null)) || "").toLowerCase();
+    // Preferir marketing /drive|/deliver; aceitar drivers.uber.com se for o único visível.
+    if (/m\.uber\.com|\/ride|eats\.uber\.com\/order/.test(href)) continue;
+    await ctx.human.clickSafe(el, { timeout: timeouts.elementWait });
+    await ctx.human.pause(800, 1_800);
+    return "earn";
+  }
+
+  // Sem Earn no menu: tenta Deliver direto na home (footer/nav).
+  const deliverHome = page
+    .getByRole("link", { name: /^(deliver|delivery)$/i })
+    .or(page.locator('a[href*="/deliver"]'))
+    .filter({ hasNotText: /drive with|^drive$/i });
+  const dn = await deliverHome.count().catch(() => 0);
+  for (let i = 0; i < Math.min(dn, 6); i++) {
+    const el = deliverHome.nth(i);
+    if (!(await el.isVisible({ timeout: 400 }).catch(() => false))) continue;
+    const href = ((await el.getAttribute("href").catch(() => null)) || "").trim();
+    await ctx.human.clickSafe(el, { timeout: timeouts.elementWait });
+    await ctx.human.pause(600, 1_400);
+    try {
+      await page.waitForURL(/\/deliver\/?/i, { timeout: 12_000 });
+    } catch {
+      if (href && /\/deliver/i.test(href)) {
+        const absolute = href.startsWith("http") ? href : `https://www.uber.com${href}`;
+        await page.goto(absolute, { timeout: timeouts.pageLoad, waitUntil: "domcontentloaded" }).catch(() => undefined);
+      }
+    }
+    await dismissCookieBannerIfPresent(page, timeouts.elementWait);
+    if (/\/deliver\/?/i.test(page.url())) return "deliver";
   }
 
   return false;
 }
 
 /**
- * Fallback: www.uber.com → menu Earn → Delivery → CTA de signup.
- * Só Delivery (não Drive de passageiros/viagens).
+ * CTA da landing Deliver: "Sign up to deliver" > links drivers/auth >
+ * "Get started" só em /deliver/.
  */
-async function enterViaEarnDelivery(ctx: RealStepContext): Promise<void> {
+async function clickDeliverSignupCta(
+  ctx: RealStepContext,
+): Promise<{ clicked: boolean; mode: string; label?: string; href?: string }> {
   const { page, config } = ctx;
   const { timeouts } = config;
 
-  await page.goto(config.marketingBaseUrl, {
-    timeout: timeouts.pageLoad,
-    waitUntil: "domcontentloaded",
-  });
+  await dismissCookieBannerIfPresent(page, timeouts.elementWait);
 
-  // 1) Abre Earn no nav (desktop ou mobile).
-  const earnNav = page
-    .getByRole("link", { name: /^earn$/i })
-    .or(page.getByRole("button", { name: /^earn$/i }))
-    .or(page.getByText(/^earn$/i));
+  const onDeliverLanding = /\/deliver\/?/i.test(page.url());
 
-  const earnVisible = await earnNav.first().isVisible({ timeout: 8_000 }).catch(() => false);
-  if (earnVisible) {
-    await earnNav.first().click({ timeout: timeouts.elementWait }).catch(() => undefined);
-    await page.waitForTimeout(Math.max(timeouts.actionDelay, 400));
-  }
+  const priority = [
+    page.getByRole("link", { name: /sign up to deliver|apply to deliver|deliver with uber/i }),
+    page.getByRole("button", { name: /sign up to deliver|apply to deliver|deliver with uber/i }),
+    page.locator('a[href*="drivers.uber.com"], a[href*="auth.uber.com"], a[href*="/a/signup"]')
+      .filter({ hasText: /sign up|get started|deliver/i }),
+    page.locator(
+      'a[aria-label*="Sign up to deliver" i], a[aria-label*="Get started" i][href*="drivers.uber.com"]',
+    ),
+    // Get started genérico só na landing Deliver (na home é Drive).
+    ...(onDeliverLanding
+      ? [
+          page.getByRole("link", { name: /^(get started)$/i }),
+          page.getByRole("button", { name: /^(get started)$/i }),
+        ]
+      : []),
+  ];
 
-  // 2) Só Delivery (nunca Drive de rides).
-  const deliverLink = page
-    .getByRole("link", { name: /^(deliver|delivery|deliver with uber|uber eats deliver)$/i })
-    .or(page.getByRole("menuitem", { name: /deliver/i }))
-    .or(page.locator('a[href*="/deliver"]'))
-    .filter({ hasNotText: /drive with|ride/i });
+  type Candidate = { el: ReturnType<Page["locator"]>; label: string; href: string; aria: string; score: number };
+  const scored: Candidate[] = [];
 
-  if (await deliverLink.first().isVisible({ timeout: 5_000 }).catch(() => false)) {
-    await deliverLink.first().click({ timeout: timeouts.elementWait });
-    await page.waitForLoadState("domcontentloaded", { timeout: timeouts.pageLoad }).catch(() => undefined);
-  } else {
-    // Menu Earn não abriu — landing direta de Delivery.
-    await page.goto(config.deliverLandingUrl, {
-      timeout: timeouts.pageLoad,
-      waitUntil: "domcontentloaded",
-    });
-  }
+  for (const loc of priority) {
+    const n = await loc.count().catch(() => 0);
+    for (let i = 0; i < Math.min(n, 8); i++) {
+      const el = loc.nth(i);
+      if (!(await el.isVisible({ timeout: 400 }).catch(() => false))) continue;
+      const label = ((await el.innerText().catch(() => "")) || "").replace(/\s+/g, " ").trim();
+      const href = ((await el.getAttribute("href").catch(() => null)) || "").trim();
+      const aria = ((await el.getAttribute("aria-label").catch(() => null)) || "").trim();
+      const blob = `${label} ${href} ${aria}`.toLowerCase();
+      if (/business|for business/.test(blob)) continue;
+      if (/^drive with|^ride$/i.test(label)) continue;
+      if (/get started/i.test(label) && /\/drive\/?$/i.test(href) && !/deliver/i.test(blob)) continue;
 
-  // 3) CTA "Sign up to deliver" / Get started.
-  const signupCta = page
-    .getByRole("link", { name: /sign up to deliver|sign up|get started|start earning|apply/i })
-    .or(page.getByRole("button", { name: /sign up to deliver|sign up|get started|start earning/i }))
-    .or(page.locator('a[href*="drivers.uber.com"], a[href*="auth.uber.com"]'));
-
-  if (await signupCta.first().isVisible({ timeout: 8_000 }).catch(() => false)) {
-    await signupCta.first().click({ timeout: timeouts.elementWait });
-    await page.waitForLoadState("domcontentloaded", { timeout: timeouts.pageLoad }).catch(() => undefined);
-  }
-
-  // Se ainda não estamos no form, força landing + drivers.
-  if (!(await looksLikeDriverSignupEntry(page))) {
-    await page.goto(config.deliverLandingUrl, {
-      timeout: timeouts.pageLoad,
-      waitUntil: "domcontentloaded",
-    });
-    const cta2 = page.getByRole("link", { name: /sign up to deliver|sign up|get started/i }).first();
-    if (await cta2.isVisible({ timeout: 5_000 }).catch(() => false)) {
-      await cta2.click({ timeout: timeouts.elementWait });
-      await page.waitForLoadState("domcontentloaded", { timeout: timeouts.pageLoad }).catch(() => undefined);
+      let score = 0;
+      if (/sign up to deliver|apply to deliver/i.test(blob)) score += 100;
+      if (/drivers\.uber\.com|auth\.uber\.com|\/a\/signup/i.test(href)) score += 80;
+      if (/deliver/i.test(blob)) score += 40;
+      if (/get started|sign up/i.test(blob)) score += 20;
+      if (score <= 0) continue;
+      scored.push({ el, label, href, aria, score });
     }
   }
 
-  if (!(await looksLikeDriverSignupEntry(page))) {
-    // Último recurso: portal drivers (já tentamos; às vezes Earn CTA redireciona melhor).
-    await page.goto(config.driversBaseUrl, {
-      timeout: timeouts.pageLoad,
-      waitUntil: "domcontentloaded",
-    });
+  scored.sort((a, b) => b.score - a.score);
+  const best = scored[0];
+  if (!best) return { clicked: false, mode: "no_signup_cta" };
+
+  await ctx.human.pause(400, 1_000);
+  await ctx.human.clickSafe(best.el, { timeout: timeouts.elementWait });
+  let navigated = await settleSignupNavigation(page, best.href, timeouts.pageLoad);
+
+  // /a/signup/drive/deliver/ às vezes cai em /s/c/deliver/ (ainda marketing).
+  // Força o portal real em vez de depender só do fallback externo.
+  if (!navigated && !(await looksLikeDriverSignupEntry(page))) {
+    try {
+      await page.goto(config.driversBaseUrl, {
+        timeout: timeouts.pageLoad,
+        waitUntil: "domcontentloaded",
+      });
+      await page.waitForURL(/auth\.uber\.com|drivers\.uber\.com/i, { timeout: 20_000 }).catch(() => undefined);
+      navigated = await looksLikeDriverSignupEntry(page);
+    } catch {
+      navigated = false;
+    }
   }
 
-  await ctx.recordStep("PORTAL_OPENED", {
-    via: "earn_delivery",
-    url: page.url(),
-  });
+  await dismissCookieBannerIfPresent(page, timeouts.elementWait);
+
+  return {
+    clicked: true,
+    mode: navigated ? "deliver_signup_cta" : "deliver_signup_cta_no_nav",
+    label: (best.label || best.aria).slice(0, 100),
+    href: best.href.slice(0, 160),
+  };
 }
+
+/**
+ * Depois de Earn: prioriza Deliver (/deliver/); se já houver CTA de signup
+ * Delivery, clica nele. Evita ficar em Drive / rides.
+ */
+async function decideClickAfterEarn(
+  ctx: RealStepContext,
+): Promise<{ clicked: boolean; mode: string; label?: string; href?: string }> {
+  const { page, config } = ctx;
+  const { timeouts } = config;
+
+  await dismissCookieBannerIfPresent(page, timeouts.elementWait);
+
+  // Signup CTA só faz sentido em /deliver/ (ou /drive/ com link deliver).
+  // Na home, "Get started" é Drive — não clicar aqui.
+  if (/\/deliver\/?/i.test(page.url()) || /\/drive\/?/i.test(page.url())) {
+    const signupNow = await clickDeliverSignupCta(ctx);
+    if (signupNow.clicked) return signupNow;
+  }
+
+  // Nav/dropdown Deliver (ex.: chevron "Drive" → Deliver, ou link /deliver/).
+  const classicDeliver = page
+    .getByRole("link", { name: /^(deliver|delivery|deliver with uber)$/i })
+    .or(page.getByRole("menuitem", { name: /^(deliver|delivery)$/i }))
+    .or(page.getByRole("button", { name: /^(deliver|delivery)$/i }))
+    .or(page.locator('a[href*="/deliver"]'))
+    .filter({ hasNotText: /drive with|^drive$|ride|sign in|sign up/i });
+
+  const dn = await classicDeliver.count().catch(() => 0);
+  for (let i = 0; i < Math.min(dn, 8); i++) {
+    const el = classicDeliver.nth(i);
+    if (!(await el.isVisible({ timeout: 400 }).catch(() => false))) continue;
+    const href = ((await el.getAttribute("href").catch(() => null)) || "").toLowerCase();
+    const label = ((await el.innerText().catch(() => "")) || "").replace(/\s+/g, " ").trim();
+    if (/eats\.uber\.com\/order|\/ride/.test(href)) continue;
+    await ctx.human.clickSafe(el, { timeout: timeouts.elementWait });
+    return { clicked: true, mode: "classic_delivery", label: label.slice(0, 80) || "Deliver", href };
+  }
+
+  // Já em /deliver/? não precisa navegar de novo.
+  if (/\/deliver\/?/i.test(page.url())) {
+    return { clicked: false, mode: "already_on_deliver" };
+  }
+
+  // Deep link Deliver (mesmo locale da URL atual se possível).
+  const localeMatch = page.url().match(/uber\.com\/([a-z]{2})\/([a-z]{2}(?:-[a-z]+)?)\//i);
+  const deliverUrl = localeMatch
+    ? `https://www.uber.com/${localeMatch[1]}/${localeMatch[2]}/deliver/`
+    : config.deliverLandingUrl;
+  await page.goto(deliverUrl, {
+    timeout: timeouts.pageLoad,
+    waitUntil: "domcontentloaded",
+  });
+  await ctx.human.pause(600, 1_400);
+  await dismissCookieBannerIfPresent(page, timeouts.elementWait);
+  return { clicked: true, mode: "goto_deliver_url", href: deliverUrl };
+}
+
 
 /**
  * Passo 2 (PDF): tela "Qual é o seu número de telefone ou e-mail?" /
@@ -429,13 +731,21 @@ async function enterViaEarnDelivery(ctx: RealStepContext): Promise<void> {
  * "This phone number is invalid" e nunca envia o código OTP.
  */
 export async function fillIdentifierStep(ctx: RealStepContext): Promise<void> {
-  const { page, context, config } = ctx;
+  const { page, context } = ctx;
   try {
     await fillIdentifierFields(ctx);
   } catch (firstError) {
-    // Form de identifier não apareceu → provavelmente fluxo rider/errado.
-    // Uma chance via Earn → Delivery.
-    if (context.uberAccountCreated) throw firstError;
+    // Request failed / CAPTCHA / LOAD_ERROR etc. NÃO são "fluxo errado" —
+    // propagar para o worker rotacionar sessão. Retry Earn só quando o form
+    // de identifier realmente não apareceu.
+    if (
+      firstError instanceof AutomationPauseSignal ||
+      firstError instanceof AutomationTechnicalError ||
+      context.uberAccountCreated
+    ) {
+      throw firstError;
+    }
+
     await ctx.recordStep("IDENTIFIER_WRONG_FLOW_RETRY_EARN_DELIVERY", {
       url: page.url(),
       error: firstError instanceof Error ? firstError.message : String(firstError),
@@ -443,7 +753,13 @@ export async function fillIdentifierStep(ctx: RealStepContext): Promise<void> {
     try {
       await enterViaEarnDelivery(ctx);
       await fillIdentifierFields(ctx);
-    } catch {
+    } catch (retryError) {
+      if (
+        retryError instanceof AutomationPauseSignal ||
+        retryError instanceof AutomationTechnicalError
+      ) {
+        throw retryError;
+      }
       throw toTechnicalError(
         firstError,
         "ELEMENT_NOT_FOUND",
@@ -461,8 +777,8 @@ async function fillIdentifierFields(ctx: RealStepContext): Promise<void> {
     name: /continue with email|continuar com (o )?e-?mail/i,
   });
   if (await emailModeButton.isVisible({ timeout: 1500 }).catch(() => false)) {
-    await emailModeButton.click({ timeout: config.timeouts.elementWait });
-    if (config.timeouts.actionDelay > 0) await page.waitForTimeout(config.timeouts.actionDelay);
+    await ctx.human.clickSafe(emailModeButton, { timeout: config.timeouts.elementWait });
+    await ctx.human.pause(400, 1_200);
   }
 
   const emailInput = page
@@ -481,10 +797,11 @@ async function fillIdentifierFields(ctx: RealStepContext): Promise<void> {
     )
     .first();
   await emailInput.waitFor({ state: "visible", timeout: config.timeouts.elementWait });
-  await emailInput.click({ timeout: config.timeouts.elementWait });
-  await emailInput.fill("");
-  // pressSequentially preserva '@' mesmo se o campo oscilar para modo tel.
-  await emailInput.pressSequentially(context.applicantData.email, { delay: 15 });
+  // Digitação humanizada preserva '@' mesmo se o campo oscilar para modo tel.
+  await ctx.human.type(emailInput, context.applicantData.email, {
+    timeout: config.timeouts.elementWait,
+    delayMs: { min: 35, max: 120 },
+  });
 
   const typed = await emailInput.inputValue();
   if (!typed.includes("@")) {
@@ -508,12 +825,13 @@ async function fillIdentifierFields(ctx: RealStepContext): Promise<void> {
   // (rotação PHONE_SMS_RETRY deixa códigos antigos na caixa catch-all).
   ctx.emailCodeRequestedAt = new Date(Date.now() - 5_000);
 
-  await clickPrimaryNext(page, config.timeouts.elementWait);
+  await ctx.human.pause(700, 1_800);
+  await clickPrimaryNext(ctx, config.timeouts.elementWait);
   await page.waitForLoadState("domcontentloaded", { timeout: config.timeouts.pageLoad });
-  if (config.timeouts.actionDelay > 0) await page.waitForTimeout(config.timeouts.actionDelay);
+  await ctx.human.pause(800, 2_200);
   await failIfUberRequestFailed(page);
-  // Puzzle pode aparecer logo após o Continue do e-mail.
-  await pauseIfUberSecurityPuzzle(page);
+  // Puzzle pode aparecer logo após o Continue do e-mail (timeout generoso).
+  await pauseIfUberSecurityPuzzle(page, 4_000);
 }
 
 /**
@@ -558,7 +876,7 @@ export async function fillEmailCodeStep(ctx: RealStepContext): Promise<void> {
   const waitUntil = Date.now() + 12_000;
   while (Date.now() < waitUntil) {
     await failIfUberRequestFailed(page, 200);
-    await pauseIfUberSecurityPuzzle(page, 200);
+    await pauseIfUberSecurityPuzzle(page, 500);
     if (await isSmsOtpScreen(page)) {
       if (context.uberAccountCreated) {
         throw new AutomationPauseSignal("SECURITY_BLOCK", {
@@ -578,7 +896,7 @@ export async function fillEmailCodeStep(ctx: RealStepContext): Promise<void> {
     await page.waitForTimeout(700);
   }
   await failIfUberRequestFailed(page, 800);
-  await pauseIfUberSecurityPuzzle(page, 1_500);
+  await pauseIfUberSecurityPuzzle(page, 2_500);
 
   if (await isSmsOtpScreen(page)) {
     throw new AutomationTechnicalError(
@@ -587,9 +905,20 @@ export async function fillEmailCodeStep(ctx: RealStepContext): Promise<void> {
     );
   }
 
+  // Sem UI de OTP e-mail → NÃO varrer IMAP (Uber não enviou / Arkose no caminho).
+  const otpVisible = await otpUi.first().isVisible({ timeout: 2_000 }).catch(() => false);
+  if (!otpVisible) {
+    await pauseIfUberSecurityPuzzle(page, 2_000);
+    throw new AutomationTechnicalError(
+      "EMAIL_CODE_RETRY",
+      "Tela de código de e-mail não apareceu após identifier — rotacionando sessão (possível anti-bot)",
+    );
+  }
+
   // IMAP pode zerar com a tela OTP ainda aberta (Uber não enviou / catch-all
   // atrasou). Clica Resend e repoll; se ainda falhar → EMAIL_CODE_RETRY
-  // (worker rotaciona sessão/fingerprint).
+  // (worker rotaciona sessão/fingerprint). Puzzle Arkose no meio → pausa
+  // imediata (não gasta o timeout IMAP inteiro).
   const maxImapRounds = 3; // 1 poll inicial + até 2 após Resend
   let code: string | undefined;
   let lastImapMiss: string | undefined;
@@ -609,27 +938,57 @@ export async function fillEmailCodeStep(ctx: RealStepContext): Promise<void> {
           "IMAP sem código e botão Resend indisponível — rotacionando sessão",
         );
       }
-      await resend.click({ timeout: config.timeouts.elementWait });
+      await ctx.human.clickSafe(resend, { timeout: config.timeouts.elementWait });
       ctx.emailCodeRequestedAt = new Date();
       await ctx.recordStep("EMAIL_CODE_RESEND", { round: imapRound });
-      await page.waitForTimeout(2_500);
+      await ctx.human.pause(1_800, 3_400);
       await failIfUberRequestFailed(page, 1_500);
+      await pauseIfUberSecurityPuzzle(page, 1_000);
     }
 
     try {
       const requestedAt = ctx.emailCodeRequestedAt ?? new Date(Date.now() - 5_000);
-      const result = await emailWorker.findVerificationCode({
-        applicantId: context.applicantId,
-        emailAccountId: context.emailAccountId,
-        proxyId: context.proxyId,
-        requestedAt,
-        expectedSender: "noreply@uber.com",
-        pollTimeoutMs: config.timeouts.emailCodePollTimeoutMs,
-        pollIntervalMs: config.timeouts.emailCodePollIntervalMs,
-        usedCodes: ctx.usedEmailCodes ? [...ctx.usedEmailCodes] : undefined,
-      });
-      code = result.code;
-      break;
+      const pollBudget = config.timeouts.emailCodePollTimeoutMs;
+      const pollInterval = config.timeouts.emailCodePollIntervalMs;
+      const deadline = Date.now() + pollBudget;
+      let found: { code: string; confidence: string } | undefined;
+
+      // Fatias ~12s: entre cada uma revalida Arkose (early-stop).
+      while (Date.now() < deadline) {
+        await pauseIfUberSecurityPuzzle(page, 400);
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) break;
+        const slice = Math.min(IMAP_POLL_CHUNK_MS, remaining);
+        try {
+          found = await emailWorker.findVerificationCode({
+            applicantId: context.applicantId,
+            emailAccountId: context.emailAccountId,
+            proxyId: context.proxyId,
+            requestedAt,
+            expectedSender: "noreply@uber.com",
+            pollTimeoutMs: slice,
+            pollIntervalMs: pollInterval,
+            usedCodes: ctx.usedEmailCodes ? [...ctx.usedEmailCodes] : undefined,
+          });
+          break;
+        } catch (chunkError) {
+          if (chunkError instanceof VerificationCodeNotFoundError) {
+            lastImapMiss = chunkError.message;
+            await pauseIfUberSecurityPuzzle(page, 400);
+            continue;
+          }
+          throw chunkError;
+        }
+      }
+
+      if (found) {
+        code = found.code;
+        break;
+      }
+
+      lastImapMiss =
+        lastImapMiss ??
+        `Nenhum código de verificação elegível foi encontrado após varredura IMAP (${pollBudget}ms)`;
     } catch (error) {
       if (error instanceof SecurityChallengeError) {
         // PHONE_VERIFICATION e AUTOMATION_BLOCKED (Google recusando o login
@@ -646,6 +1005,7 @@ export async function fillEmailCodeStep(ctx: RealStepContext): Promise<void> {
         lastImapMiss = error.message;
         continue;
       }
+      if (error instanceof AutomationPauseSignal) throw error;
       throw toTechnicalError(error, "EMAIL_CODE_RETRIEVAL_FAILED", "Falha ao buscar código de e-mail");
     }
   }
@@ -670,9 +1030,9 @@ export async function fillEmailCodeStep(ctx: RealStepContext): Promise<void> {
         // Código rejeitado → Resend e busca OTP novo (exclui os já tentados).
         const resend = page.getByRole("button", { name: /^resend$/i });
         if (await resend.isVisible({ timeout: 3_000 }).catch(() => false)) {
-          await resend.click({ timeout: config.timeouts.elementWait });
+          await ctx.human.clickSafe(resend, { timeout: config.timeouts.elementWait });
           ctx.emailCodeRequestedAt = new Date();
-          await page.waitForTimeout(2_000);
+          await ctx.human.pause(1_500, 2_800);
         } else {
           throw new Error('Uber rejeitou o passcode e o botão "Resend" não apareceu');
         }
@@ -706,12 +1066,12 @@ export async function fillEmailCodeStep(ctx: RealStepContext): Promise<void> {
       for (let i = 0; i < Math.min(boxCount, 8); i++) {
         await otpBoxes.nth(i).fill("").catch(() => undefined);
       }
-      await firstBox.click();
-      await page.keyboard.type(code, { delay: 75 });
+      await ctx.human.clickSafe(firstBox, { timeout: config.timeouts.elementWait });
+      await ctx.human.typeOtp(code);
 
       const nextButton = page.getByRole("button", { name: PRIMARY_NEXT_NAME }).first();
       if (await nextButton.isEnabled().catch(() => false)) {
-        await nextButton.click({ timeout: config.timeouts.elementWait });
+        await ctx.human.clickSafe(nextButton, { timeout: config.timeouts.elementWait });
       }
 
     // Espera sair da tela OTP antes do passo de telefone - sem isso o
@@ -796,11 +1156,12 @@ export async function fillPhoneStep(ctx: RealStepContext): Promise<void> {
 
       const phoneInput = phoneEntryInput(page);
       await phoneInput.waitFor({ state: "visible", timeout: config.timeouts.elementWait });
-      await phoneInput.click({ timeout: config.timeouts.elementWait });
-      await phoneInput.fill("");
-      await phoneInput.pressSequentially(phone.replace(/\D/g, "").slice(-10), { delay: 20 });
+      await ctx.human.type(phoneInput, phone.replace(/\D/g, "").slice(-10), {
+        timeout: config.timeouts.elementWait,
+        delayMs: { min: 40, max: 130 },
+      });
 
-      await clickPrimaryNext(page, config.timeouts.elementWait);
+      await clickPrimaryNext(ctx, config.timeouts.elementWait);
       await page.waitForLoadState("domcontentloaded", { timeout: config.timeouts.pageLoad });
 
       await failIfUberRequestFailed(page, 2_000);
@@ -893,7 +1254,10 @@ export async function fillPasswordStep(ctx: RealStepContext): Promise<void> {
     }
 
     const passwordInput = page.locator('input[type="password"]').first();
-    await passwordInput.fill(password);
+    await ctx.human.type(passwordInput, password, {
+      timeout: config.timeouts.elementWait,
+      delayMs: { min: 50, max: 150 },
+    });
     // Validação client-side da Uber (length/digit) habilita o Next.
     const nextButton = page.getByRole("button", { name: PRIMARY_NEXT_NAME }).first();
     await nextButton.waitFor({ state: "visible", timeout: config.timeouts.elementWait });
@@ -907,7 +1271,7 @@ export async function fillPasswordStep(ctx: RealStepContext): Promise<void> {
         { timeout: config.timeouts.elementWait },
       )
       .catch(() => undefined);
-    await nextButton.click({ timeout: config.timeouts.elementWait });
+    await ctx.human.clickSafe(nextButton, { timeout: config.timeouts.elementWait });
     await page.waitForLoadState("domcontentloaded", { timeout: config.timeouts.pageLoad });
   } catch (error) {
     if (error instanceof AutomationTechnicalError) throw error;
@@ -937,13 +1301,15 @@ export async function fillNameStep(ctx: RealStepContext): Promise<void> {
     ]);
 
     if (firstNameInput && lastNameInput) {
-      await firstNameInput.fill(firstName);
-      await lastNameInput.fill(lastName);
+      await ctx.human.type(firstNameInput, firstName, { timeout: config.timeouts.elementWait });
+      await ctx.human.pause(200, 700);
+      await ctx.human.type(lastNameInput, lastName, { timeout: config.timeouts.elementWait });
     } else {
       // Fallback estrutural: primeiros dois inputs de texto visiveis da tela.
       const textInputs = page.locator('input[type="text"]:visible');
-      await textInputs.nth(0).fill(firstName);
-      await textInputs.nth(1).fill(lastName);
+      await ctx.human.type(textInputs.nth(0), firstName, { timeout: config.timeouts.elementWait });
+      await ctx.human.pause(200, 700);
+      await ctx.human.type(textInputs.nth(1), lastName, { timeout: config.timeouts.elementWait });
     }
 
     const lastValue = lastNameInput
@@ -953,7 +1319,7 @@ export async function fillNameStep(ctx: RealStepContext): Promise<void> {
       throw new Error(`Sobrenome ficou vazio após o fill (fullName="${context.applicantData.fullName}")`);
     }
 
-    await clickPrimaryNext(page, config.timeouts.elementWait);
+    await clickPrimaryNext(ctx, config.timeouts.elementWait);
     // Confirma que saiu da tela de nome (senão o Next foi ignorado por validação).
     await page
       .getByRole("heading", { name: /what'?s your name/i })
@@ -1031,12 +1397,12 @@ export async function acceptTermsStep(ctx: RealStepContext): Promise<void> {
 
     if (await agreeCheckbox.isVisible().catch(() => false)) {
       const checked = await agreeCheckbox.isChecked().catch(() => false);
-      if (!checked) await agreeCheckbox.click({ timeout: config.timeouts.elementWait });
+      if (!checked) await ctx.human.clickSafe(agreeCheckbox, { timeout: config.timeouts.elementWait });
     } else {
-      await agreeRow.click({ timeout: config.timeouts.elementWait });
+      await ctx.human.clickSafe(agreeRow, { timeout: config.timeouts.elementWait });
     }
 
-    await clickPrimaryNext(page, config.timeouts.elementWait);
+    await clickPrimaryNext(ctx, config.timeouts.elementWait);
     await termsHeading.waitFor({ state: "hidden", timeout: config.timeouts.pageLoad }).catch(() => undefined);
     await page.waitForLoadState("domcontentloaded", { timeout: config.timeouts.pageLoad });
   } catch (error) {
@@ -1058,7 +1424,7 @@ export async function confirmAllSetStep(ctx: RealStepContext): Promise<void> {
     if (visible) {
       const continueButton = page.getByRole("button", { name: PRIMARY_NEXT_NAME }).first();
       if (await continueButton.isVisible({ timeout: 3_000 }).catch(() => false)) {
-        await continueButton.click({ timeout: config.timeouts.elementWait });
+        await ctx.human.clickSafe(continueButton, { timeout: config.timeouts.elementWait });
       }
     }
   } catch {

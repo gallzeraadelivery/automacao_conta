@@ -36,7 +36,8 @@
   "pnpm": {
     "onlyBuiltDependencies": [
       "esbuild",
-      "msgpackr-extract"
+      "msgpackr-extract",
+      "electron"
     ]
   }
 }

@@ -1,9 +1,6 @@
 # syntax=docker/dockerfile:1
 #
-# Build de produção do worker (apps/worker). Roda via `tsx` pelo mesmo
-# motivo documentado em Dockerfile.api (workspace packages exportam `main`
-# apontando para TypeScript fonte; `tsc` sozinho não produz um `dist/`
-# executável direto com `node`, verificado manualmente nesta fase).
+# Worker + Electron mobile shell (Android/iPhone) + Chromium fallback.
 FROM node:22-slim AS base
 RUN corepack enable
 WORKDIR /app
@@ -12,25 +9,59 @@ FROM base AS deps
 COPY pnpm-workspace.yaml package.json pnpm-lock.yaml tsconfig.json ./
 COPY packages ./packages
 COPY apps/worker ./apps/worker
+COPY apps/mobile-shell ./apps/mobile-shell
 RUN pnpm install --frozen-lockfile --prod
 
 FROM base AS runtime
 ENV NODE_ENV=production
-# packages/email-service (PlaywrightGmailClient) e packages/platform-adapters
-# (UberDriverApplicationAdapter) precisam de um Chromium real - instalado
-# aqui em vez de baixado sob demanda em runtime. Caminho próprio (não o
-# default em ~/.cache) porque o container roda como usuário não-root depois.
 ENV PLAYWRIGHT_BROWSERS_PATH=/app/.playwright-browsers
+ENV AUTOMATION_HEADLESS=false
+ENV PLAYWRIGHT_BROWSER_CHANNEL=chromium
+ENV AUTOMATION_BROWSER_ENGINE=electron
+ENV AUTOMATION_FINGERPRINT_OS=auto
+ENV DISPLAY=:99
 
 COPY --from=deps /app ./
-# --with-deps instala também as bibliotecas de sistema do Chromium
-# (root necessário aqui - por isso roda antes de trocar para o usuário sem privilégios).
-RUN npx --yes playwright install --with-deps chromium
+
+# xvfb + deps Electron / Chromium
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends \
+    xvfb \
+    xauth \
+    fonts-liberation \
+    fonts-noto-color-emoji \
+    ca-certificates \
+    wget \
+    gnupg \
+    libnss3 \
+    libatk-bridge2.0-0 \
+    libgtk-3-0 \
+    libgbm1 \
+    libasound2 \
+    libx11-xcb1 \
+    libxcomposite1 \
+    libxdamage1 \
+    libxrandr2 \
+    libdrm2 \
+    libxkbcommon0 \
+    libcups2 \
+    libpango-1.0-0 \
+    libcairo2 \
+  && rm -rf /var/lib/apt/lists/*
+
+RUN npx --yes playwright install --with-deps chromium \
+  && (npx --yes playwright install --with-deps chrome \
+      || echo "WARN: canal chrome indisponível nesta arch — runtime usa chromium")
 
 RUN groupadd --system --gid 1001 nodeworker \
   && useradd --system --uid 1001 --gid nodeworker --home-dir /app workeruser \
   && mkdir -p /app/storage/browser-profiles \
   && chown -R workeruser:nodeworker /app
+
+COPY infra/docker/worker-entrypoint.sh /app/worker-entrypoint.sh
+RUN chmod +x /app/worker-entrypoint.sh \
+  && chown workeruser:nodeworker /app/worker-entrypoint.sh
+
 USER workeruser
 
-CMD ["pnpm", "--filter", "@uber-automation/worker", "start"]
+CMD ["/app/worker-entrypoint.sh"]

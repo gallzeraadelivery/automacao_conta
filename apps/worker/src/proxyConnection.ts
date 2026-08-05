@@ -19,6 +19,8 @@ export interface ProxyConnection {
   server: string;
   username?: string;
   password?: string;
+  /** Região declarada no cadastro do proxy (texto livre). */
+  declaredRegion: string | null;
 }
 
 const PROXY_CREDENTIAL_CONTEXT = { applicantId: "system:proxy" };
@@ -49,5 +51,6 @@ export async function resolveProxyConnection(proxyId: string): Promise<ProxyConn
     server: `${row.protocol}://${secret.host}:${row.port}`,
     username: secret.username,
     password: secret.password,
+    declaredRegion: row.declaredRegion ?? null,
   };
 }

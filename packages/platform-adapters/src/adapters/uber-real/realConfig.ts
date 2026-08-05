@@ -1,10 +1,9 @@
 /**
- * URLs e parâmetros do fluxo REAL de cadastro de motorista parceiro
- * (drivers.uber.com -> bonjour.uber.com) - baseado em
- * FLUXO_AUTOMACAO_UBER_COM_PRINTS.pdf (prints reais do fluxo, fornecido
- * pelo usuário), não em suposição. Diferente de `../uber/config.ts`
- * (site simulado, `apps/mock-server`), este arquivo é usado quando
- * `AUTOMATION_TARGET=production` (apps/worker/src/env.ts).
+ * URLs e parâmetros do fluxo REAL de cadastro Delivery / motorista parceiro
+ * (www.uber.com → Earn → Delivery → auth/drivers → bonjour.uber.com) —
+ * baseado em FLUXO_AUTOMACAO_UBER_COM_PRINTS.pdf e no fluxo observado.
+ * Diferente de `../uber/config.ts` (site simulado, `apps/mock-server`),
+ * este arquivo é usado quando `AUTOMATION_TARGET=production`.
  *
  * IMPORTANTE - fronteira honesta: os seletores em `realSelectors.ts` foram
  * escritos a partir de screenshots (texto/rótulos visíveis), não do HTML
@@ -13,11 +12,10 @@
  * corrige) isso.
  */
 export interface RealUberConfig {
-  /** Portal de cadastro (email/telefone/senha/nome/termos/gênero/localização/serviço). */
+  /** Fallback direto ao portal (se Earn→Delivery não abrir o signup). */
   driversBaseUrl: string;
   /**
-   * Marketing uber.com — fallback se drivers.uber.com não abrir o fluxo
-   * certo: menu Earn → Delivery.
+   * Marketing uber.com — entrada primária: menu Earn → Delivery.
    */
   marketingBaseUrl: string;
   /** Landing direta de Delivery (Earn), usada se o menu Earn falhar. */
