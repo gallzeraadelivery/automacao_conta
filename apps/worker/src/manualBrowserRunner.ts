@@ -136,17 +136,25 @@ export function createManualBrowserRunner(
         },
       });
 
+      // Cookies vazios: ainda abre (login/manual do zero). Antes bloqueava e
+      // a janela nunca aparecia no fluxo “continuar na mão”.
       if (loadedCookieCount === 0) {
-        throw new TechnicalAutomationError(
-          "PAGE_UNAVAILABLE",
-          "Nenhum cookie Uber no perfil — rode a automação antes de abrir o browser manual",
-        );
+        await auditLogger.log({
+          companyId: data.companyId,
+          applicantId: data.applicantId,
+          action: "manual_browser_empty_cookies",
+          metadata: {
+            profileId: profile.id,
+            hint: "Abrindo sem sessão Uber — faça login manual se necessário",
+          },
+        });
       }
 
       const session = await launchAutomationBrowserSession({
         fingerprint,
         proxy: proxyConnection,
         headless: false,
+        profileStoragePath: profile.storagePath,
       });
       const browser = session.browser;
 

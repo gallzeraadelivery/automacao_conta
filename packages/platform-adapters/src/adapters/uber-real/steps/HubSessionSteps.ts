@@ -63,6 +63,11 @@ async function waitOutWhiteSpinner(page: Page, maxMs: number): Promise<void> {
   }
 }
 
+/** Spinner do resume: curto o bastante para não estourar o budget de 4–6 min. */
+const HUB_RESUME_SPINNER_MS = 12_000;
+const HUB_RESUME_RELOAD_SPINNER_MS = 10_000;
+const HUB_RESUME_GOTO_MS = 30_000;
+
 const HUB_CANDIDATE_URLS = [
   "https://bonjour.uber.com/profile",
   "https://bonjour.uber.com/",
@@ -71,25 +76,40 @@ const HUB_CANDIDATE_URLS = [
 ] as const;
 
 /**
+ * Indício de sessão Uber já existente (JWT / sid típicos).
+ * Perfil frio (jar vazio) → false → signup não deve gastar minutos em resume.
+ */
+export async function hasUberSessionCookies(page: Page): Promise<boolean> {
+  const cookies = await page.context().cookies().catch(() => []);
+  return cookies.some(
+    (c) =>
+      /uber\.com$/i.test(c.domain.replace(/^\./, "")) &&
+      /^(jwt-session|sid|csid|_cm)$/i.test(c.name),
+  );
+}
+
+/**
  * Se já há cookies de conta criada, abre bonjour e confirma sessão logada.
  * Retorna true → pular signup (identifier/OTP/phone/…) e ir ao hub.
  */
 export async function tryResumeHubSession(ctx: RealStepContext): Promise<boolean> {
   const { page, config } = ctx;
   const urls = [config.profileUrl, ...HUB_CANDIDATE_URLS.filter((u) => u !== config.profileUrl)];
+  const gotoTimeout = Math.min(config.timeouts.pageLoad, HUB_RESUME_GOTO_MS);
 
   for (const url of urls) {
     try {
       await page.goto(url, {
-        timeout: Math.max(config.timeouts.pageLoad, 45_000),
+        timeout: gotoTimeout,
         waitUntil: "domcontentloaded",
       });
     } catch {
       continue;
     }
 
-    // Mobile (Android/iPhone) demora mais no spinner branco do bonjour.
-    await waitOutWhiteSpinner(page, 45_000);
+    // Mobile (Android/iPhone) demora no spinner branco do bonjour — mas
+    // não esperamos 45s+ por URL (conta fria / sessão morta).
+    await waitOutWhiteSpinner(page, HUB_RESUME_SPINNER_MS);
 
     if (await looksLikeSmsChallenge(page)) {
       await ctx.recordStep("HUB_RESUME_BLOCKED_SMS", { url: page.url() });
@@ -109,8 +129,8 @@ export async function tryResumeHubSession(ctx: RealStepContext): Promise<boolean
     }
 
     // Última chance: reload curto se ainda estiver em spinner/URL de perfil.
-    await page.reload({ waitUntil: "domcontentloaded", timeout: 45_000 }).catch(() => undefined);
-    await waitOutWhiteSpinner(page, 25_000);
+    await page.reload({ waitUntil: "domcontentloaded", timeout: gotoTimeout }).catch(() => undefined);
+    await waitOutWhiteSpinner(page, HUB_RESUME_RELOAD_SPINNER_MS);
     if ((await looksLikeUberHub(page)) || (await looksLikeOnboardingScreens(page))) {
       await ctx.recordStep("HUB_SESSION_RESUMED", { url: page.url(), via: `${url}#reload` });
       await ctx.persistSession?.({ markGolden: true });

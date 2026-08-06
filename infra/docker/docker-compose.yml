@@ -42,8 +42,12 @@ services:
       DATABASE_URL: postgres://${POSTGRES_USER:-uber_automation}:${POSTGRES_PASSWORD:-change-me-strong-password}@postgres:5432/${POSTGRES_DB:-uber_automation}
       REDIS_URL: redis://redis:6379
       WEB_PUBLIC_URL: ${WEB_PUBLIC_URL:-http://localhost:3000}
+      # Mesmo volume do worker — download de cookies / delete de perfil.
+      BROWSER_PROFILES_STORAGE_PATH: /app/storage/browser-profiles
     ports:
       - "${API_PORT:-4000}:4000"
+    volumes:
+      - browser_profiles_data:/app/storage/browser-profiles
     depends_on:
       postgres:
         condition: service_healthy
@@ -95,6 +99,9 @@ services:
       # direto em ./storage/automation-screenshots na sua máquina, sem
       # precisar de `docker cp`.
       AUTOMATION_SCREENSHOTS_PATH: /app/storage/automation-screenshots
+    ports:
+      # noVNC: abra http://localhost:6080/vnc.html para ver o Electron headed
+      - "6080:6080"
     volumes:
       - browser_profiles_data:/app/storage/browser-profiles
       - ../../storage/automation-screenshots:/app/storage/automation-screenshots

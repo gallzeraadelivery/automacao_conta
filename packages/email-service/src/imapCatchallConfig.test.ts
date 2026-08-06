@@ -9,6 +9,15 @@ describe("resolveCatchallInboxEmail", () => {
     expect(resolveCatchallInboxEmail("Anyone@Mail2Too.com")).toBe("galldelivery@mail2too.com");
   });
 
+  it("maps mailsproton aliases (Cloudflare forward) to galldelivery inbox", () => {
+    expect(resolveCatchallInboxEmail("carlos@mailsproton.com")).toBe(
+      "galldelivery@mail2too.com",
+    );
+    expect(resolveCatchallInboxEmail("naoresponsa@mailsproton.com")).toBe(
+      "galldelivery@mail2too.com",
+    );
+  });
+
   it("returns null for the catch-all inbox itself", () => {
     expect(resolveCatchallInboxEmail("galldelivery@mail2too.com")).toBeNull();
   });

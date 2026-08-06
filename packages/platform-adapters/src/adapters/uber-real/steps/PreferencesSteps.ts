@@ -2,7 +2,7 @@ import { toTechnicalError } from "../../errorMapping";
 import { AutomationPauseSignal, AutomationTechnicalError } from "../../../types";
 import type { RealStepContext } from "../realStepContext";
 import type { Page } from "playwright";
-import { softGoto } from "./HubSessionSteps";
+import { looksLikeAuthGate, softGoto } from "./HubSessionSteps";
 
 /** Mesmo padrão de AccountCreationSteps - "Next →" / Continue / Continuar. */
 const PRIMARY_NEXT_NAME = /^(continuar|continue|next|pr[oó]ximo)(\s*→)?$/i;
@@ -203,25 +203,29 @@ async function dismissUberSorryErrorIfPresent(page: Page, timeout: number): Prom
   return true;
 }
 
+/** Copy das telas educativas pós-"Complete next steps" / start-earning. */
+const EARN_EDUCATION_COPY_RE =
+  /work that flexes|flexes to fit your schedule|earn in a way that adapts|women riders want women drivers|more control and peace of mind|access safety tools and rider preferences|meet the demand from women riders/i;
+
 /**
- * Interstitial "Work that flexes…" / similar em start-earning — bloqueia
- * o fluxo até clicar "Got it". O botão costuma ficar no rodapé sticky;
- * Playwright às vezes marca como not-visible → forçamos scroll + click JS.
+ * Interstitial "Work that flexes…" / "More control and peace of mind…" —
+ * bloqueia o fluxo até clicar "Got it". O botão costuma ficar no rodapé
+ * sticky; Playwright às vezes marca como not-visible → scroll + click JS.
  */
 async function dismissEarnEducationInterstitialIfPresent(
   page: Page,
   timeout: number,
 ): Promise<boolean> {
   const gotItLocator = page
-    .getByRole("button", { name: /got it/i })
-    .or(page.locator("button, [role='button'], a, [data-baseweb='button']").filter({ hasText: /got it/i }));
+    .getByRole("button", { name: /^got it$/i })
+    .or(page.locator("button, [role='button'], a, [data-baseweb='button']").filter({ hasText: /^got it$/i }));
 
   let clicked = false;
   for (let attempt = 0; attempt < 5; attempt++) {
     const onEducation =
       /start-earning|\/deliver/i.test(page.url()) ||
       (await page
-        .getByText(/work that flexes|flexes to fit your schedule|earn in a way that adapts|women riders want women drivers/i)
+        .getByText(EARN_EDUCATION_COPY_RE)
         .first()
         .isVisible({ timeout: 1_200 })
         .catch(() => false));
@@ -277,149 +281,78 @@ async function dismissEarnEducationInterstitialIfPresent(
   return clicked;
 }
 
+/** Tela "Welcome back, {Name}!" com CTA Complete next steps. */
+async function looksLikeWelcomeBackScreen(page: Page): Promise<boolean> {
+  const heading = page
+    .getByRole("heading", { name: /welcome back/i })
+    .or(page.getByText(/welcome back,.+!/i));
+  const cta = page
+    .getByRole("button", { name: /complete next steps/i })
+    .or(page.getByRole("link", { name: /complete next steps/i }));
+  return (
+    (await heading.first().isVisible({ timeout: 2_000 }).catch(() => false)) ||
+    (await cta.first().isVisible({ timeout: 1_500 }).catch(() => false))
+  );
+}
+
 /**
- * Conta já no hub sem tela de cidade: www.uber.com → Earn (nav topo) →
- * (opcional) Delivery → espera "Earn with Uber" / cidade.
- *
- * Conta logada às vezes cai em /start-earning/?city=… sem menu Earn — aí
- * dispensa interstitial "Got it" e segue CTAs / deep link de delivery.
+ * Pós-conta: Welcome back → Complete next steps → (Got It educativo).
+ * Observado quando Documents está vazio e a Uber manda para start-earning.
  */
-async function openEarnCityViaMarketingNav(ctx: RealStepContext): Promise<boolean> {
-  const { page, config } = ctx;
-  const navTimeout = Math.max(config.timeouts.pageLoad, 45_000);
-  const earnHeading = page
-    .getByRole("heading", { name: /earn with uber/i })
-    .or(page.getByText(/where would you like to earn/i));
+async function advanceWelcomeBackInterstitialsIfPresent(
+  page: Page,
+  timeout: number,
+): Promise<{ clickedWelcomeCta: boolean; dismissedEducation: boolean }> {
+  let clickedWelcomeCta = false;
 
-  async function cityVisible(timeoutMs: number): Promise<boolean> {
-    return earnHeading.first().isVisible({ timeout: timeoutMs }).catch(() => false);
-  }
-
-  async function clickAndSettle(target: ReturnType<Page["locator"]>): Promise<void> {
-    // noWaitAfter: proxy lento em drivers.uber.com / deliver trava o click() padrão.
-    await ctx.human.clickSafe(target, {
-      timeout: config.timeouts.elementWait,
-      noWaitAfter: true,
-    });
+  if (await looksLikeWelcomeBackScreen(page)) {
     await page
-      .waitForLoadState("domcontentloaded", { timeout: Math.min(config.timeouts.pageLoad, 30_000) })
+      .evaluate(() => {
+        window.scrollTo(0, Math.min(400, document.body.scrollHeight));
+      })
       .catch(() => undefined);
-    await ctx.human.pause(700, 1_600);
-  }
 
-  async function trySignupCtas(): Promise<boolean> {
-    await dismissCookieBannerIfPresent(page, config.timeouts.elementWait);
-    await dismissUberSorryErrorIfPresent(page, config.timeouts.elementWait);
-    await discardIfUberFatalBurnPage(page, ctx);
-    await dismissEarnEducationInterstitialIfPresent(page, config.timeouts.elementWait);
+    const clickedJs = await page
+      .evaluate(() => {
+        const nodes = Array.from(
+          document.querySelectorAll("button, a, [role='button'], [data-baseweb='button']"),
+        );
+        const el = nodes.find((n) =>
+          /complete next steps/i.test((n.textContent || "").replace(/\s+/g, " ").trim()),
+        );
+        if (!el || !(el instanceof HTMLElement)) return false;
+        el.scrollIntoView({ block: "center", inline: "nearest" });
+        el.click();
+        return true;
+      })
+      .catch(() => false);
 
-    if (await cityVisible(3_000)) return true;
-
-    // 1) Só Delivery (nunca Drive/rides genérico).
-    const deliverLink = page
-      .getByRole("link", { name: /sign up to deliver|deliver with uber|^deliver$|^delivery$/i })
-      .or(page.getByRole("menuitem", { name: /deliver/i }))
-      .or(page.getByRole("button", { name: /sign up to deliver|deliver with uber|^deliver$/i }))
-      .or(page.locator('a[href*="/deliver"]'))
-      .filter({ hasNotText: /drive with uber|^drive$/i });
-
-    if (await deliverLink.first().isVisible({ timeout: 5_000 }).catch(() => false)) {
-      await clickAndSettle(deliverLink.first());
-      await ctx.recordStep("EARNING_LOCATION_DELIVERY_CLICKED", { url: page.url() });
-      await dismissUberSorryErrorIfPresent(page, config.timeouts.elementWait);
-      await discardIfUberFatalBurnPage(page, ctx);
-      await dismissEarnEducationInterstitialIfPresent(page, config.timeouts.elementWait);
-      if (await cityVisible(12_000)) return true;
-    }
-
-    // 2) CTAs de signup — EXCLUI "Get started" → drivers.uber.com/ (portal genérico).
-    const deliverSignup = page
-      .getByRole("link", { name: /sign up to deliver|start earning|apply to deliver|deliver with uber/i })
-      .or(page.getByRole("button", { name: /sign up to deliver|start earning|apply to deliver|deliver with uber/i }))
-      .or(
-        page
-          .locator('a[data-testid="button"], a[data-baseweb="button"], a.css-eNDRBa')
-          .filter({ hasText: /sign up to deliver|start earning|get started/i })
-          .filter({ has: page.locator('[href*="deliver"], [href*="earn"], [href*="drive-pref"]') }),
-      );
-
-    const candidates = deliverSignup;
-    const n = await candidates.count().catch(() => 0);
-    for (let i = 0; i < Math.min(n, 6); i++) {
-      const el = candidates.nth(i);
-      if (!(await el.isVisible({ timeout: 800 }).catch(() => false))) continue;
-      const href = (await el.getAttribute("href").catch(() => null)) ?? "";
-      // Portal genérico drivers.uber.com/ não abre a tela de cidade.
-      if (/^https?:\/\/drivers\.uber\.com\/?$/i.test(href.trim())) {
-        continue;
+    if (clickedJs) {
+      clickedWelcomeCta = true;
+    } else {
+      const cta = page
+        .getByRole("button", { name: /complete next steps/i })
+        .or(page.getByRole("link", { name: /complete next steps/i }))
+        .or(
+          page
+            .locator("button, a, [role='button'], [data-baseweb='button']")
+            .filter({ hasText: /complete next steps/i }),
+        )
+        .first();
+      if (await cta.isVisible({ timeout: 3_000 }).catch(() => false)) {
+        await cta.click({ timeout, force: true }).catch(() => undefined);
+        clickedWelcomeCta = true;
       }
-      await clickAndSettle(el);
-      await ctx.recordStep("EARNING_LOCATION_SIGNUP_CTA_CLICKED", { url: page.url(), href });
-      await dismissUberSorryErrorIfPresent(page, config.timeouts.elementWait);
-      await discardIfUberFatalBurnPage(page, ctx);
-      await dismissEarnEducationInterstitialIfPresent(page, config.timeouts.elementWait);
-      if (await cityVisible(15_000)) return true;
     }
 
-    return false;
-  }
-
-  await softGoto(page, config.marketingBaseUrl, navTimeout);
-  await dismissCookieBannerIfPresent(page, config.timeouts.elementWait);
-  await dismissUberSorryErrorIfPresent(page, config.timeouts.elementWait);
-  await discardIfUberFatalBurnPage(page, ctx);
-  await dismissEarnEducationInterstitialIfPresent(page, config.timeouts.elementWait);
-
-  if (await cityVisible(5_000)) return true;
-
-  // Earn no topo da página (header/nav) — não ir direto em /deliver.
-  const header = page.locator("header, [role='banner'], nav").first();
-  const earnNav = header
-    .getByRole("link", { name: /^earn$/i })
-    .or(header.getByRole("button", { name: /^earn$/i }))
-    .or(header.getByText(/^earn$/i))
-    .or(page.getByRole("link", { name: /^earn$/i }))
-    .or(page.getByRole("button", { name: /^earn$/i }));
-
-  const earnVisible = await earnNav.first().isVisible({ timeout: 10_000 }).catch(() => false);
-  if (earnVisible) {
-    await ctx.human.clickSafe(earnNav.first(), {
-      timeout: config.timeouts.elementWait,
-      noWaitAfter: true,
-    });
-    await ctx.human.pause(900, 2_000);
-    await ctx.recordStep("EARNING_LOCATION_EARN_NAV_CLICKED", { url: page.url() });
-    await dismissEarnEducationInterstitialIfPresent(page, config.timeouts.elementWait);
-    if (await cityVisible(20_000)) return true;
-    if (await trySignupCtas()) return true;
-  } else {
-    // Conta logada: marketing redireciona p/ start-earning sem menu Earn.
-    await ctx.recordStep("EARNING_LOCATION_EARN_NAV_MISSING", { url: page.url() });
-    if (await trySignupCtas()) return true;
-  }
-
-  // Deep links conhecidos (delivery / start earning).
-  const fallbackUrls = [
-    "https://www.uber.com/us/en/drive/delivery/",
-    "https://www.uber.com/us/en/deliver/",
-    "https://www.uber.com/go/drive-pref",
-  ];
-  for (const url of fallbackUrls) {
-    await softGoto(page, url, navTimeout);
-    await dismissCookieBannerIfPresent(page, config.timeouts.elementWait);
-    await discardIfUberFatalBurnPage(page, ctx);
-    await dismissEarnEducationInterstitialIfPresent(page, config.timeouts.elementWait);
-    if (await cityVisible(10_000)) {
-      await ctx.recordStep("EARNING_LOCATION_DEEP_LINK", { url: page.url(), via: url });
-      return true;
-    }
-    if (await trySignupCtas()) {
-      await ctx.recordStep("EARNING_LOCATION_DEEP_LINK", { url: page.url(), via: url });
-      return true;
+    if (clickedWelcomeCta) {
+      await page.waitForLoadState("domcontentloaded", { timeout }).catch(() => undefined);
+      await page.waitForTimeout(1_500);
     }
   }
 
-  return cityVisible(5_000);
+  const dismissedEducation = await dismissEarnEducationInterstitialIfPresent(page, timeout);
+  return { clickedWelcomeCta, dismissedEducation };
 }
 
 /**
@@ -427,8 +360,8 @@ async function openEarnCityViaMarketingNav(ctx: RealStepContext): Promise<boolea
  * Escolhe a próxima cidade do rodízio (não fica na pré-preenchida do IP).
  * Dispensa cookies e clica Next.
  *
- * Espera a UI de cidade (spinner pós-gênero). Se não aparecer:
- * uber.com → Earn (topo) → Delivery.
+ * Se a UI de cidade não aparecer após esperar (e um goto em drivers):
+ * pausa + salva cookies — NÃO volta ao marketing nem CTA /a/signup.
  */
 export async function confirmEarningLocationStep(ctx: RealStepContext): Promise<void> {
   const { page, config } = ctx;
@@ -464,33 +397,80 @@ export async function confirmEarningLocationStep(ctx: RealStepContext): Promise<
       .first();
 
     await cityInput.waitFor({ state: "visible", timeout: config.timeouts.elementWait });
-    await ctx.human.type(cityInput, city, {
-      timeout: config.timeouts.elementWait,
-      delayMs: { min: 40, max: 130 },
-    });
-    await ctx.human.pause(700, 1_400);
 
+    // Uber autocomplete: digitar "Orlando, FL" inteiro → "No Results".
+    // Digitar só o núcleo ("Orlando" / "Orlan") → lista; clicar "Orlando, FL, USA".
     const cityCore = city.split(",")[0]!.trim();
-    const cityEsc = city.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const statePart = (city.split(",")[1] ?? "").trim(); // "FL"
     const coreEsc = cityCore.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const stateEsc = statePart.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-    // Autocomplete Uber: "Rochester, NY, USA" — precisa CLICAR a opção;
-    // só digitar deixa o Next disabled.
-    const option = page
-      .getByRole("option", { name: new RegExp(`${coreEsc}.*USA|${cityEsc}`, "i") })
-      .or(page.locator('[role="listbox"] [role="option"]').filter({ hasText: new RegExp(coreEsc, "i") }))
-      .or(page.locator('[data-baseweb="menu"] li, [data-baseweb="popover"] li').filter({ hasText: new RegExp(coreEsc, "i") }))
-      .or(page.getByText(new RegExp(`^${cityEsc},?\\s*USA$`, "i")))
-      .or(page.getByText(new RegExp(`^${cityEsc}$`, "i")));
+    const preferredOptionRe = stateEsc
+      ? new RegExp(`^${coreEsc},\\s*${stateEsc},\\s*USA$`, "i")
+      : new RegExp(`^${coreEsc},\\s*[A-Z]{2},\\s*USA$`, "i");
 
-    const optionVisible = await option.first().isVisible({ timeout: 10_000 }).catch(() => false);
-    if (!optionVisible) {
+    async function clearAndType(query: string): Promise<void> {
+      await cityInput.click({ timeout: config.timeouts.elementWait });
+      await cityInput.fill("");
+      await ctx.human.pause(200, 450);
+      await ctx.human.type(cityInput, query, {
+        timeout: config.timeouts.elementWait,
+        delayMs: { min: 55, max: 140 },
+      });
+      await ctx.human.pause(800, 1_600);
+    }
+
+    function optionLocators(queryCore: string) {
+      const qEsc = queryCore.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      // Preferência: "Orlando, FL, USA" (cidade), não aeroporto/outlet.
+      const preferred = page
+        .getByRole("option", { name: preferredOptionRe })
+        .or(
+          page
+            .locator('[role="listbox"] [role="option"], [data-baseweb="menu"] li, [data-baseweb="popover"] li')
+            .filter({ hasText: preferredOptionRe }),
+        );
+      const anyCityUsa = page
+        .getByRole("option", { name: new RegExp(`^${qEsc},\\s*[A-Z]{2},\\s*USA$`, "i") })
+        .or(
+          page
+            .locator('[role="listbox"] [role="option"]')
+            .filter({ hasText: new RegExp(`^${qEsc},\\s*[A-Z]{2},\\s*USA$`, "i") }),
+        );
+      const anyWithCore = page
+        .locator('[role="listbox"] [role="option"], [data-baseweb="menu"] li')
+        .filter({ hasText: new RegExp(qEsc, "i") })
+        .filter({ hasNotText: /airport|outlet|premium|boulevard|international/i });
+      return { preferred, anyCityUsa, anyWithCore };
+    }
+
+    const queries = [
+      cityCore,
+      cityCore.length > 5 ? cityCore.slice(0, Math.max(5, cityCore.length - 2)) : cityCore,
+    ].filter((q, i, arr) => q && arr.indexOf(q) === i);
+
+    let clicked = false;
+    for (const query of queries) {
+      await clearAndType(query);
+      const locs = optionLocators(cityCore);
+      for (const loc of [locs.preferred, locs.anyCityUsa, locs.anyWithCore]) {
+        const el = loc.first();
+        if (await el.isVisible({ timeout: 6_000 }).catch(() => false)) {
+          await ctx.human.clickSafe(el, { timeout: config.timeouts.elementWait });
+          clicked = true;
+          break;
+        }
+      }
+      if (clicked) break;
+    }
+
+    if (!clicked) {
       throw new AutomationTechnicalError(
         "ELEMENT_NOT_FOUND",
-        `Autocomplete de cidade não listou opção para "${city}"`,
+        `Autocomplete de cidade não listou opção para "${city}" (tente digitando o nome e clicando na sugestão USA)`,
       );
     }
-    await ctx.human.clickSafe(option.first(), { timeout: config.timeouts.elementWait });
+
     await ctx.human.pause(400, 1_000);
 
     // Confirma que a sugestão fechou / valor ficou selecionado.
@@ -504,29 +484,143 @@ export async function confirmEarningLocationStep(ctx: RealStepContext): Promise<
   try {
     await dismissCookieBannerIfPresent(page, config.timeouts.elementWait);
     await dismissUberSorryErrorIfPresent(page, config.timeouts.elementWait);
-    await dismissEarnEducationInterstitialIfPresent(page, config.timeouts.elementWait);
+    const welcomePass1 = await advanceWelcomeBackInterstitialsIfPresent(
+      page,
+      config.timeouts.elementWait,
+    );
+    if (welcomePass1.clickedWelcomeCta || welcomePass1.dismissedEducation) {
+      await ctx.recordStep("WELCOME_BACK_ADVANCED", {
+        url: page.url(),
+        ...welcomePass1,
+      });
+      // Após Got It a Uber demora a montar cidade ou cards de serviço.
+      const afterWelcomeDeadline = Date.now() + 20_000;
+      while (Date.now() < afterWelcomeDeadline) {
+        if (await looksLikeServiceTypeScreen(page, config.serviceTypeLabel)) break;
+        if (await earnCityUi().first().isVisible({ timeout: 500 }).catch(() => false)) break;
+        await page.waitForTimeout(700);
+      }
+    }
+
+    // Já na escolha de serviço (cidade já feita antes) → não exige Earn city.
+    if (await looksLikeServiceTypeScreen(page, config.serviceTypeLabel)) {
+      await ctx.recordStep("EARNING_LOCATION_CONFIRMED", {
+        skipped: true,
+        reason: "already_on_service_type_after_welcome",
+        city: ctx.assignedEarnCity ?? ctx.context.assignedEarnCity,
+      });
+      await ctx.persistSession?.({ markGolden: true, forceGolden: true });
+      return;
+    }
+
+    // Já caiu de volta no login frio (phone/email) → não “recuperar” com CTA signup.
+    if (await looksLikeAuthGate(page)) {
+      await ctx.recordStep("POST_ACCOUNT_MANUAL_CONTINUE", {
+        url: page.url(),
+        reason: "auth_gate_after_account",
+      });
+      await ctx.persistSession?.({ markGolden: true, forceGolden: true });
+      throw new AutomationPauseSignal(
+        "SECURITY_BLOCK",
+        {
+          type: "SECURITY_BLOCK",
+          provider: "POST_ACCOUNT_STUCK",
+          confidence: "HIGH",
+        },
+        "Conta criada mas voltou ao login — cookies salvos; continue manualmente (sem retentar signup)",
+      );
+    }
 
     // Pós-gênero a Uber costuma demorar no spinner antes da cidade.
     let onEarn = await waitForCityUi(45_000);
 
+    // Uma tentativa alinhada ao next_url do auth (drivers) — sem marketing
+    // nem CTA /a/signup (isso reinicia login frio e queima a sessão).
     if (!onEarn) {
       await ctx.recordStep("EARNING_LOCATION_MISSING", { url: page.url() });
-      onEarn = await openEarnCityViaMarketingNav(ctx);
-    }
-
-    if (!onEarn) {
       await softGoto(page, config.driversBaseUrl, navTimeout);
       await dismissCookieBannerIfPresent(page, config.timeouts.elementWait);
       await dismissUberSorryErrorIfPresent(page, config.timeouts.elementWait);
-      await dismissEarnEducationInterstitialIfPresent(page, config.timeouts.elementWait);
-      onEarn = await waitForCityUi(30_000);
+      const welcomePass2 = await advanceWelcomeBackInterstitialsIfPresent(
+        page,
+        config.timeouts.elementWait,
+      );
+      if (welcomePass2.clickedWelcomeCta || welcomePass2.dismissedEducation) {
+        await ctx.recordStep("WELCOME_BACK_ADVANCED", {
+          url: page.url(),
+          via: "drivers",
+          ...welcomePass2,
+        });
+        const afterWelcomeDeadline = Date.now() + 15_000;
+        while (Date.now() < afterWelcomeDeadline) {
+          if (await looksLikeServiceTypeScreen(page, config.serviceTypeLabel)) break;
+          if (await earnCityUi().first().isVisible({ timeout: 500 }).catch(() => false)) break;
+          await page.waitForTimeout(700);
+        }
+      }
+      if (await looksLikeServiceTypeScreen(page, config.serviceTypeLabel)) {
+        await ctx.recordStep("EARNING_LOCATION_CONFIRMED", {
+          skipped: true,
+          reason: "service_type_after_drivers_welcome",
+          city: ctx.assignedEarnCity ?? ctx.context.assignedEarnCity,
+        });
+        await ctx.persistSession?.({ markGolden: true, forceGolden: true });
+        return;
+      }
+      onEarn = await waitForCityUi(20_000);
     }
 
+    // start-earning: Welcome back → Got It → cidade ou Delivery.
+    if (!onEarn) {
+      await softGoto(page, config.startEarningUrl, navTimeout);
+      await dismissCookieBannerIfPresent(page, config.timeouts.elementWait);
+      await dismissUberSorryErrorIfPresent(page, config.timeouts.elementWait);
+      const welcomePass3 = await advanceWelcomeBackInterstitialsIfPresent(
+        page,
+        config.timeouts.elementWait,
+      );
+      if (welcomePass3.clickedWelcomeCta || welcomePass3.dismissedEducation) {
+        await ctx.recordStep("WELCOME_BACK_ADVANCED", {
+          url: page.url(),
+          via: "start_earning",
+          ...welcomePass3,
+        });
+        const afterWelcomeDeadline = Date.now() + 15_000;
+        while (Date.now() < afterWelcomeDeadline) {
+          if (await looksLikeServiceTypeScreen(page, config.serviceTypeLabel)) break;
+          if (await earnCityUi().first().isVisible({ timeout: 500 }).catch(() => false)) break;
+          await page.waitForTimeout(700);
+        }
+      }
+      if (await looksLikeServiceTypeScreen(page, config.serviceTypeLabel)) {
+        await ctx.recordStep("EARNING_LOCATION_CONFIRMED", {
+          skipped: true,
+          reason: "service_type_after_start_earning_welcome",
+          city: ctx.assignedEarnCity ?? ctx.context.assignedEarnCity,
+        });
+        await ctx.persistSession?.({ markGolden: true, forceGolden: true });
+        return;
+      }
+      onEarn = await waitForCityUi(20_000);
+    }
+
+    // Ainda sem cidade/hub: pausa humana + cookies. Não retentar nem voltar
+    // ao funnel de signup.
     if (!onEarn) {
       await discardIfUberFatalBurnPage(page, ctx);
-      throw new AutomationTechnicalError(
-        "ELEMENT_TIMEOUT",
-        "Tela de cidade (Earn with Uber) não apareceu — retentar",
+      await ctx.recordStep("POST_ACCOUNT_MANUAL_CONTINUE", {
+        url: page.url(),
+        reason: "city_or_hub_not_reached_after_account",
+      });
+      await ctx.persistSession?.({ markGolden: true, forceGolden: true });
+      throw new AutomationPauseSignal(
+        "SECURITY_BLOCK",
+        {
+          type: "SECURITY_BLOCK",
+          provider: "POST_ACCOUNT_STUCK",
+          confidence: "HIGH",
+        },
+        "Conta criada mas cidade/hub não abriu — cookies salvos; continue manualmente (sem retentar signup)",
       );
     }
 
@@ -580,6 +674,17 @@ export async function confirmEarningLocationStep(ctx: RealStepContext): Promise<
 export async function finishEarnThenGoToHubOnBackground(ctx: RealStepContext): Promise<void> {
   const { page, config } = ctx;
   await dismissCookieBannerIfPresent(page, config.timeouts.elementWait);
+  const welcome = await advanceWelcomeBackInterstitialsIfPresent(
+    page,
+    config.timeouts.elementWait,
+  );
+  if (welcome.clickedWelcomeCta || welcome.dismissedEducation) {
+    await ctx.recordStep("WELCOME_BACK_ADVANCED", {
+      url: page.url(),
+      via: "before_service_type",
+      ...welcome,
+    });
+  }
 
   if (await looksLikeBackgroundOrSocialScreen(page)) {
     await ctx.recordStep("SERVICE_TYPE_SUBMITTED", {
@@ -699,11 +804,12 @@ async function openDocumentsTab(ctx: RealStepContext): Promise<void> {
 }
 
 /**
- * Se Documents não listar CNH/foto: uber.com → Earn → cidade → Delivery →
- * background → profile. Só retorna true quando a lista tiver itens.
+ * Se Documents não listar CNH/foto: start-earning (Welcome back) → Got It →
+ * cidade (se pedir) → Delivery → background → profile.
+ * Só retorna true quando a lista tiver itens.
  */
 export async function ensureDriverDocsViaEarnIfNeeded(ctx: RealStepContext): Promise<void> {
-  const { page } = ctx;
+  const { page, config } = ctx;
   await openDocumentsTab(ctx);
 
   const deadlineQuick = Date.now() + 12_000;
@@ -713,7 +819,24 @@ export async function ensureDriverDocsViaEarnIfNeeded(ctx: RealStepContext): Pro
   }
 
   await ctx.recordStep("DRIVER_DOCS_EMPTY_RERUN_EARN", { url: page.url() });
-  // Conta já existe: só Earn→cidade→Delivery→hub (gênero já foi).
+
+  // Entrada observada: Welcome back em start-earning (não drivers/profile).
+  const navTimeout = Math.max(config.timeouts.pageLoad, 45_000);
+  await softGoto(page, config.startEarningUrl, navTimeout);
+  await dismissCookieBannerIfPresent(page, config.timeouts.elementWait);
+  const welcome = await advanceWelcomeBackInterstitialsIfPresent(
+    page,
+    config.timeouts.elementWait,
+  );
+  if (welcome.clickedWelcomeCta || welcome.dismissedEducation) {
+    await ctx.recordStep("WELCOME_BACK_ADVANCED", {
+      url: page.url(),
+      via: "docs_empty_rerun",
+      ...welcome,
+    });
+  }
+
+  // Conta já existe: Earn→cidade (se precisar)→Delivery→hub (gênero já foi).
   await confirmEarningLocationStep(ctx);
   await finishEarnThenGoToHubOnBackground(ctx);
   await openDocumentsTab(ctx);

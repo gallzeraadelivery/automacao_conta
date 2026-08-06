@@ -5,6 +5,7 @@
  * Env:
  *   MOBILE_SHELL_CONFIG = JSON {
  *     cdpPort, userAgent, width, height, deviceScaleFactor,
+ *     userDataDir?: string,  // isolado por motorista (obrigatório em produção)
  *     proxy?: { server, username?, password? }
  *   }
  */
@@ -29,6 +30,17 @@ const userAgent =
   config.userAgent ||
   "Mozilla/5.0 (Linux; Android 14; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36";
 
+// Isola cookies/localStorage por perfil — sem isso todos os jobs compartilham
+// ~/.config/Electron e “herdam” a sessão Uber do motorista anterior.
+if (config.userDataDir && typeof config.userDataDir === "string") {
+  try {
+    fs.mkdirSync(config.userDataDir, { recursive: true });
+    app.setPath("userData", config.userDataDir);
+    app.setPath("sessionData", path.join(config.userDataDir, "session"));
+  } catch (err) {
+    console.error("MOBILE_SHELL_USER_DATA_DIR_FAILED", err);
+  }
+}
 // Docker / container: sem sandbox.
 app.commandLine.appendSwitch("no-sandbox");
 app.commandLine.appendSwitch("disable-setuid-sandbox");

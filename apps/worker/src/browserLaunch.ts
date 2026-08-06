@@ -80,11 +80,16 @@ async function waitForReadyFile(filePath: string, timeoutMs: number): Promise<vo
 
 /**
  * Lança Electron mobile + conecta Playwright via CDP.
+ * `userDataDir` isolado por motorista — evita herdar sessão Uber do job anterior.
  */
 export async function launchElectronMobileSession(args: {
   fingerprint: BrowserFingerprint;
   proxy?: ProxyConnection | null;
   headless?: boolean;
+  /** Pasta persistente do perfil (…/applicant-UUID) — Electron usa …/electron-userdata. */
+  profileStoragePath?: string;
+  /** Alternativa explícita ao path derivado do perfil. */
+  userDataDir?: string;
 }): Promise<AutomationBrowserSession> {
   const { fingerprint, proxy } = args;
   const cdpPort = await freePort();
@@ -92,12 +97,19 @@ export async function launchElectronMobileSession(args: {
   const readyFile = path.join(readyDir, "ready.json");
   await writeFile(readyFile, "", "utf8");
 
+  const userDataDir =
+    args.userDataDir ??
+    (args.profileStoragePath
+      ? path.join(args.profileStoragePath, "electron-userdata")
+      : path.join(readyDir, "electron-userdata"));
+
   const shellConfig = {
     cdpPort,
     userAgent: fingerprint.userAgent,
     width: fingerprint.viewport.width,
     height: fingerprint.viewport.height,
     deviceScaleFactor: fingerprint.deviceScaleFactor,
+    userDataDir,
     proxy: proxy
       ? {
           server: proxy.server,
@@ -108,17 +120,26 @@ export async function launchElectronMobileSession(args: {
   };
 
   const electronBin = resolveElectronBinary();
-  const child = spawn(electronBin, ["--no-sandbox", "--disable-setuid-sandbox", MOBILE_SHELL_MAIN], {
-    cwd: MOBILE_SHELL_DIR,
-    env: {
-      ...process.env,
-      MOBILE_SHELL_CONFIG: JSON.stringify(shellConfig),
-      MOBILE_SHELL_READY_FILE: readyFile,
-      ELECTRON_ENABLE_LOGGING: "1",
-      ELECTRON_DISABLE_SANDBOX: "1",
+  const child = spawn(
+    electronBin,
+    [
+      `--user-data-dir=${userDataDir}`,
+      "--no-sandbox",
+      "--disable-setuid-sandbox",
+      MOBILE_SHELL_MAIN,
+    ],
+    {
+      cwd: MOBILE_SHELL_DIR,
+      env: {
+        ...process.env,
+        MOBILE_SHELL_CONFIG: JSON.stringify(shellConfig),
+        MOBILE_SHELL_READY_FILE: readyFile,
+        ELECTRON_ENABLE_LOGGING: "1",
+        ELECTRON_DISABLE_SANDBOX: "1",
+      },
+      stdio: ["ignore", "pipe", "pipe"],
     },
-    stdio: ["ignore", "pipe", "pipe"],
-  });
+  );
 
   let stderrBuf = "";
   child.stderr?.on("data", (chunk: Buffer) => {
@@ -232,6 +253,8 @@ export async function launchAutomationBrowserSession(args: {
   fingerprint: BrowserFingerprint;
   proxy?: ProxyConnection | null;
   headless?: boolean;
+  profileStoragePath?: string;
+  userDataDir?: string;
 }): Promise<AutomationBrowserSession> {
   const engine = env.AUTOMATION_BROWSER_ENGINE;
   if (engine === "chromium") {

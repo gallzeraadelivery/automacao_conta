@@ -17,6 +17,7 @@ import {
 } from "./steps/AccountCreationSteps";
 import {
   settleAfterAccountCreated,
+  hasUberSessionCookies,
   tryResumeHubSession,
 } from "./steps/HubSessionSteps";
 import {
@@ -82,9 +83,18 @@ export class RealUberSignupAdapter extends PlatformAdapter {
     });
     const ctx = this.buildStepContext();
     const accountCreated = Boolean(this.context.uberAccountCreated);
+    const hasSession = accountCreated || (await hasUberSessionCookies(this.page));
 
-    // Sempre tenta hub primeiro (cookies injetados no context).
-    if (await tryResumeHubSession(ctx)) {
+    // (A) Conta nova sem cookies/JWT: não gastar minutos em bonjour/drivers.
+    // Resume só quando há indício real de sessão.
+    if (!hasSession) {
+      await this.auditLogger.log({
+        companyId: this.context.companyId ?? "unknown",
+        applicantId: this.context.applicantId,
+        action: "uber_real_hub_resume_skipped",
+        metadata: { reason: "cold_start_no_session" },
+      });
+    } else if (await tryResumeHubSession(ctx)) {
       if (this.context.uberEarnSetupComplete) {
         await this.finishFromHub(ctx);
         return;

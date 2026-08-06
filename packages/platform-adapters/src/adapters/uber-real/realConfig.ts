@@ -20,6 +20,11 @@ export interface RealUberConfig {
   marketingBaseUrl: string;
   /** Landing direta de Delivery (Earn), usada se o menu Earn falhar. */
   deliverLandingUrl: string;
+  /**
+   * Funnel "start earning" — "Welcome back" / Complete next steps após
+   * conta criada quando Documents ainda está vazio.
+   */
+  startEarningUrl: string;
   /** Portal de perfil/documentos, após o cadastro administrativo (Passo 12+ do PDF). */
   profileUrl: string;
   timeouts: {
@@ -46,6 +51,7 @@ export const REAL_UBER_CONFIG: RealUberConfig = {
   driversBaseUrl: "https://drivers.uber.com",
   marketingBaseUrl: "https://www.uber.com/us/en/",
   deliverLandingUrl: "https://www.uber.com/us/en/deliver/",
+  startEarningUrl: "https://www.uber.com/us/en/start-earning/",
   profileUrl: "https://bonjour.uber.com/profile",
   timeouts: {
     pageLoad: 30000,

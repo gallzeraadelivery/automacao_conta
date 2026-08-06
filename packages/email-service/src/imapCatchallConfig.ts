@@ -7,6 +7,8 @@
  */
 export const IMAP_CATCHALL_INBOX_BY_DOMAIN: Readonly<Record<string, string>> = {
   "mail2too.com": "galldelivery@mail2too.com",
+  // Cloudflare Email Routing → forward para a mesma caixa Spacemail.
+  "mailsproton.com": "galldelivery@mail2too.com",
 };
 
 /**

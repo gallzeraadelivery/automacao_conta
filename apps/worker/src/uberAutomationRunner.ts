@@ -372,6 +372,7 @@ async function runSingleBrowserAttempt(args: {
   const session = await launchAutomationBrowserSession({
     fingerprint,
     proxy: isProduction ? proxyConnection : null,
+    profileStoragePath: profile.storagePath,
   });
   const browser = session.browser;
 
@@ -498,39 +499,53 @@ async function runSingleBrowserAttempt(args: {
 
     const persistSession = async (opts?: { markGolden?: boolean; forceGolden?: boolean }) => {
       if (!context) return;
-      const result = await persistUberStorageState(context, profile.storagePath, {
-        markGolden: opts?.markGolden,
-        forceGolden: opts?.forceGolden,
-        // Mid-flow sempre grava o que tem agora (já autenticado).
-        rejectIfWeakerThanDisk: false,
-      });
-      await auditLogger.log({
-        companyId: data.companyId,
-        applicantId: data.applicantId,
-        action: "browser_profile_uber_cookies_saved",
-        metadata: {
-          profileId: profile.id,
-          jarSize: result.cookieCount,
-          originCount: result.originCount,
-          golden: Boolean(result.golden),
-          skippedGolden: Boolean(result.skippedGolden),
-          source: opts?.markGolden ? "golden_checkpoint" : "checkpoint",
-          forceGolden: Boolean(opts?.forceGolden),
-        },
-      });
-
-      // Número que chegou ao hub/cidade não pode repetir em outro cadastro.
-      if (opts?.markGolden && automationContext.assignedPlaceholderPhone) {
-        await phoneAllocator
-          .markUsed(automationContext.assignedPlaceholderPhone, "hub_or_city_golden")
-          .catch(() => undefined);
+      try {
+        const result = await persistUberStorageState(context, profile.storagePath, {
+          markGolden: opts?.markGolden,
+          forceGolden: opts?.forceGolden,
+          // Mid-flow sempre grava o que tem agora (já autenticado).
+          rejectIfWeakerThanDisk: false,
+        });
         await auditLogger.log({
           companyId: data.companyId,
           applicantId: data.applicantId,
-          action: "placeholder_phone_marked_used",
+          action: "browser_profile_uber_cookies_saved",
           metadata: {
-            phoneLast4: automationContext.assignedPlaceholderPhone.replace(/\D/g, "").slice(-4),
-            reason: "hub_or_city_golden",
+            profileId: profile.id,
+            jarSize: result.cookieCount,
+            originCount: result.originCount,
+            golden: Boolean(result.golden),
+            skippedGolden: Boolean(result.skippedGolden),
+            cookiesOnlyFallback: Boolean(result.cookiesOnlyFallback),
+            source: opts?.markGolden ? "golden_checkpoint" : "checkpoint",
+            forceGolden: Boolean(opts?.forceGolden),
+          },
+        });
+
+        // Número que chegou ao hub/cidade não pode repetir em outro cadastro.
+        if (opts?.markGolden && automationContext.assignedPlaceholderPhone) {
+          await phoneAllocator
+            .markUsed(automationContext.assignedPlaceholderPhone, "hub_or_city_golden")
+            .catch(() => undefined);
+          await auditLogger.log({
+            companyId: data.companyId,
+            applicantId: data.applicantId,
+            action: "placeholder_phone_marked_used",
+            metadata: {
+              phoneLast4: automationContext.assignedPlaceholderPhone.replace(/\D/g, "").slice(-4),
+              reason: "hub_or_city_golden",
+            },
+          });
+        }
+      } catch (error) {
+        // Nunca derruba o fluxo de signup por falha ao gravar cookies.
+        await auditLogger.log({
+          companyId: data.companyId,
+          applicantId: data.applicantId,
+          action: "browser_profile_uber_cookies_save_failed",
+          metadata: {
+            profileId: profile.id,
+            error: error instanceof Error ? error.message.slice(0, 240) : "unknown",
           },
         });
       }

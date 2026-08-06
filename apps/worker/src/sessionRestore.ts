@@ -239,11 +239,34 @@ export async function persistUberStorageState(
   skipped?: boolean;
   golden?: boolean;
   skippedGolden?: boolean;
+  cookiesOnlyFallback?: boolean;
 }> {
-  const state = await context.storageState();
+  // Electron CDP às vezes não implementa Target.createTarget — storageState()
+  // quebra no meio do fluxo. Fallback: só cookies (sem localStorage origins).
+  let state: { cookies: Cookie[]; origins: UberStorageState["origins"] };
+  let cookiesOnlyFallback = false;
+  try {
+    const full = await context.storageState();
+    state = {
+      cookies: normalizePlaywrightCookies(full.cookies as unknown[]),
+      origins: full.origins ?? [],
+    };
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    if (!/Target\.createTarget|Not supported|Protocol error/i.test(msg)) {
+      throw error;
+    }
+    const rawCookies = await context.cookies();
+    state = {
+      cookies: normalizePlaywrightCookies(rawCookies as unknown[]),
+      origins: [],
+    };
+    cookiesOnlyFallback = true;
+  }
+
   const incoming: UberStorageState = {
-    cookies: normalizePlaywrightCookies(state.cookies as unknown[]),
-    origins: state.origins ?? [],
+    cookies: state.cookies,
+    origins: state.origins,
   };
 
   if (options.rejectIfWeakerThanDisk) {
@@ -269,6 +292,7 @@ export async function persistUberStorageState(
         originCount: incoming.origins.length,
         golden: false,
         skippedGolden: true,
+        cookiesOnlyFallback,
       };
     }
     const siteDir = path.join(profileDir, "uber");
@@ -297,6 +321,7 @@ export async function persistUberStorageState(
     cookieCount: incoming.cookies.length,
     originCount: incoming.origins.length,
     golden: wroteGolden,
+    cookiesOnlyFallback,
   };
 }
 
