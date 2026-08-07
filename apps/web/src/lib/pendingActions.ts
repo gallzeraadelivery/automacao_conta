@@ -35,6 +35,8 @@ export const PAUSE_REASON_LABELS: Record<string, string> = {
   CAPTCHA: "CAPTCHA detectado",
   TWO_FACTOR: "Autenticação em duas etapas (2FA)",
   SECURITY_BLOCK: "Bloqueio de segurança",
+  PHONE_PROBLEM: "Problema celular",
+  REFUSED: "Recusado pela Uber",
 };
 
 export function pauseReasonLabel(reason: string | null): string {

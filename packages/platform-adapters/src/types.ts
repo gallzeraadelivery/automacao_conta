@@ -73,7 +73,12 @@ export type AutomationPauseReason =
   | "TWO_FACTOR"
   | "SECURITY_BLOCK"
   /** Uber Internal Server Error / fluxo Delivery quebrado — descartar e-mail, sem retry. */
-  | "REFUSED";
+  | "REFUSED"
+  /**
+   * SMS rejeitado em 2 placeholders — para o job (FAILED) para tentar depois
+   * com outros números; os rejeitados ficam na blacklist do pool.
+   */
+  | "PHONE_PROBLEM";
 
 export type VerificationDetectedType =
   "PROFILE_PHOTO" | "DRIVER_LICENSE" | "CAPTCHA" | "TWO_FACTOR" | "SECURITY_BLOCK";

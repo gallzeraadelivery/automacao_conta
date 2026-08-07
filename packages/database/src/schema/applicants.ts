@@ -29,6 +29,7 @@ export const PAUSE_REASONS = [
   "TWO_FACTOR",
   "SECURITY_BLOCK",
   "REFUSED",
+  "PHONE_PROBLEM",
 ] as const;
 export type PauseReason = (typeof PAUSE_REASONS)[number];
 

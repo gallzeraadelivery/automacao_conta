@@ -21,6 +21,8 @@ export const AUDIT_ACTION_TO_LIVE_STEP: Readonly<Record<string, string>> = {
   browser_profile_uber_cookies_save_skipped: "BROWSER",
   browser_session_rotated: "SESSION_ROTATE",
   uber_real_signup_phone_sms_rejected_retry: "PHONE_SMS_RETRY",
+  automation_job_phone_problem: "PHONE_PROBLEM",
+  uber_real_signup_phone_problem: "PHONE_PROBLEM",
   uber_real_signup_password_submitted: "PASSWORD",
   uber_real_signup_name_submitted: "NAME",
   uber_real_signup_terms_accepted: "TERMS",

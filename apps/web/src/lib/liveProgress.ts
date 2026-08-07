@@ -14,6 +14,7 @@ export const LIVE_STEP_LABELS: Record<string, string> = {
   EMAIL_VERIFIED: "E-mail verificado na Uber",
   PHONE: "Telefone placeholder enviado",
   PHONE_SMS_RETRY: "SMS no telefone — trocando número",
+  PHONE_PROBLEM: "Problema celular — tentar depois",
   SESSION_ROTATE: "Reiniciando sessão (novo fingerprint/número)",
   PASSWORD: "Senha enviada",
   NAME: "Nome enviado",

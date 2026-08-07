@@ -47,14 +47,14 @@ describe("buildPlaceholderPassword", () => {
 });
 
 describe("buildPlaceholderPhone", () => {
-  it("gera número US a partir da base 5613256600", () => {
-    expect(buildPlaceholderPhone("any", 0)).toBe("(561) 325-6600");
+  it("gera número US a partir da base 5613265300", () => {
+    expect(buildPlaceholderPhone("any", 0)).toBe("(561) 326-5300");
   });
 
   it("incrementa 01 02 03 nas tentativas seguintes", () => {
-    expect(buildPlaceholderPhone("any", 1)).toBe("(561) 325-6601");
-    expect(buildPlaceholderPhone("any", 2)).toBe("(561) 325-6602");
-    expect(buildPlaceholderPhone("any", 3)).toBe("(561) 325-6603");
+    expect(buildPlaceholderPhone("any", 1)).toBe("(561) 326-5301");
+    expect(buildPlaceholderPhone("any", 2)).toBe("(561) 326-5302");
+    expect(buildPlaceholderPhone("any", 3)).toBe("(561) 326-5303");
   });
 
   it("é estável para o mesmo attempt (independente do applicantId)", () => {
@@ -65,13 +65,13 @@ describe("buildPlaceholderPhone", () => {
 describe("nextFreePlaceholderPhoneDigits", () => {
   it("começa na base quando nenhum número está bloqueado", async () => {
     const { nextFreePlaceholderPhoneDigits, formatUsPhoneFromDigits } = await import("./nameUtils");
-    expect(formatUsPhoneFromDigits(nextFreePlaceholderPhoneDigits([]))).toBe("(561) 325-6600");
+    expect(formatUsPhoneFromDigits(nextFreePlaceholderPhoneDigits([]))).toBe("(561) 326-5300");
   });
 
   it("pula números já usados no hub", async () => {
     const { nextFreePlaceholderPhoneDigits, formatUsPhoneFromDigits } = await import("./nameUtils");
     expect(
-      formatUsPhoneFromDigits(nextFreePlaceholderPhoneDigits(["5613256600", "5613256601"])),
-    ).toBe("(561) 325-6602");
+      formatUsPhoneFromDigits(nextFreePlaceholderPhoneDigits(["5613265300", "5613265301"])),
+    ).toBe("(561) 326-5302");
   });
 });

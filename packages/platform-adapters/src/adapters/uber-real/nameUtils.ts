@@ -52,9 +52,9 @@ export function buildPlaceholderPassword(fullName: string, suffix: string): stri
  * ao hub) fica em `nextFreePlaceholderPhoneDigits` + pool do worker.
  *
  * Base configurável via `UBER_PLACEHOLDER_PHONE_BASE` (10 dígitos, só números).
- * Padrão: 5613256600.
+ * Padrão: 5613265300.
  */
-const DEFAULT_PHONE_BASE_DIGITS = "5613256600";
+const DEFAULT_PHONE_BASE_DIGITS = "5613265300";
 
 export function resolvePhoneBaseDigits(): string {
   const raw = (process.env.UBER_PLACEHOLDER_PHONE_BASE ?? DEFAULT_PHONE_BASE_DIGITS).replace(

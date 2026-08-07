@@ -265,6 +265,24 @@ async function handleJobError(
       return;
     }
 
+    // 2 SMS ruins: FAILED + aviso "problema celular" — pode recomeçar depois
+    // com outros números (blacklist já tem os rejeitados). Segue a fila.
+    if (reason === "PHONE_PROBLEM") {
+      await deps.auditLogger.log({
+        companyId: data.companyId,
+        applicantId: data.applicantId,
+        action: "automation_job_phone_problem",
+        metadata: {
+          step: data.currentStep,
+          reason,
+          retryable: false,
+          detail: error instanceof Error ? error.message : undefined,
+        },
+      });
+      await deps.applicantStatusRepository?.markFailed?.(data.applicantId, "PHONE_PROBLEM");
+      return;
+    }
+
     await deps.auditLogger.log({
       companyId: data.companyId,
       applicantId: data.applicantId,

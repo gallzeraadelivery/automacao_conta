@@ -273,7 +273,8 @@ async function waitAfterPhoneSubmit(page: Page, timeout: number): Promise<AfterP
 }
 
 /** Quantas vezes tenta outro placeholder na MESMA sessão (Back / change number). */
-const PHONE_PLACEHOLDER_IN_SESSION_ATTEMPTS = 3;
+/** SMS ruim → troca número; na 2ª recusa → PHONE_PROBLEM (não rotaciona sessão). */
+const PHONE_PLACEHOLDER_IN_SESSION_ATTEMPTS = 2;
 
 /**
  * Passo 1: abre o cadastro Delivery pelo caminho de marketing.
@@ -970,6 +971,17 @@ export async function fillEmailCodeStep(ctx: RealStepContext): Promise<void> {
             pollIntervalMs: pollInterval,
             usedCodes: ctx.usedEmailCodes ? [...ctx.usedEmailCodes] : undefined,
           });
+          // Cinto: extrator já descarta LOW; se ainda vier, não digita.
+          if (found && String(found.confidence).toUpperCase() === "LOW") {
+            await ctx.recordStep("EMAIL_CODE_LOW_CONFIDENCE_SKIPPED", {
+              maskedValue: maskCode(found.code),
+              confidence: found.confidence,
+            });
+            found = undefined;
+            lastImapMiss = "Código IMAP com confiança LOW ignorado (catch-all)";
+            await pauseIfUberSecurityPuzzle(page, 400);
+            continue;
+          }
           break;
         } catch (chunkError) {
           if (chunkError instanceof VerificationCodeNotFoundError) {
@@ -1047,6 +1059,16 @@ export async function fillEmailCodeStep(ctx: RealStepContext): Promise<void> {
           pollIntervalMs: config.timeouts.emailCodePollIntervalMs,
           usedCodes: [...used],
         });
+        if (String(next.confidence).toUpperCase() === "LOW") {
+          await ctx.recordStep("EMAIL_CODE_LOW_CONFIDENCE_SKIPPED", {
+            maskedValue: maskCode(next.code),
+            confidence: next.confidence,
+            resendAttempt: otpAttempt,
+          });
+          throw new VerificationCodeNotFoundError(
+            "Código IMAP com confiança LOW ignorado após Resend (catch-all)",
+          );
+        }
         code = next.code;
         await ctx.recordStep("CODE_RETRIEVED", {
           maskedValue: maskCode(code),
@@ -1130,13 +1152,17 @@ export async function fillEmailCodeStep(ctx: RealStepContext): Promise<void> {
  * número digitado é SEMPRE um placeholder (nunca o telefone real do
  * motorista) - o atendente corrige na finalização do cadastro.
  *
- * Alocação: próximo livre a partir da base (não recomeça no …00 se esse
- * já foi ao hub **ou** teve SMS rejeitado). SMS → marca o número e tenta
- * outro livre na sessão; esgotou → PHONE_SMS_RETRY.
+ * Alocação: próximo livre (hub **ou** SMS rejeitado na blacklist). SMS →
+ * marca e tenta outro na sessão; 2 recusas → PHONE_PROBLEM (FAILED, tenta
+ * depois com outros números; não rotaciona fingerprint).
  */
 export async function fillPhoneStep(ctx: RealStepContext): Promise<void> {
   const { page, context, config } = ctx;
   const offset = context.phoneAttemptOffset ?? 0;
+
+  const refusePhoneProblem = (detail: string): never => {
+    throw new AutomationPauseSignal("PHONE_PROBLEM", undefined, detail);
+  };
 
   try {
     for (let attempt = 0; attempt < PHONE_PLACEHOLDER_IN_SESSION_ATTEMPTS; attempt++) {
@@ -1182,26 +1208,34 @@ export async function fillPhoneStep(ctx: RealStepContext): Promise<void> {
       if (outcome === "sms" || (await isSmsOtpScreen(page))) {
         // Número que pediu SMS não reutiliza em nenhum cadastro.
         await ctx.markPlaceholderPhoneUsed?.(phone, "sms_rejected").catch(() => undefined);
+        const smsAttempt = attempt + 1;
         await ctx.recordStep("PHONE_SMS_REJECTED_RETRY", {
           attempt: offset + attempt,
           nextAttempt: offset + attempt + 1,
-          inSession: attempt + 1 < PHONE_PLACEHOLDER_IN_SESSION_ATTEMPTS,
+          inSession: smsAttempt < PHONE_PLACEHOLDER_IN_SESSION_ATTEMPTS,
           phoneLast4: phone.replace(/\D/g, "").slice(-4),
         });
 
-        if (attempt + 1 >= PHONE_PLACEHOLDER_IN_SESSION_ATTEMPTS) {
-          throw new AutomationTechnicalError(
-            "PHONE_SMS_RETRY",
-            `Uber pediu OTP SMS no placeholder (tentativa ${offset + attempt}) — reiniciando processo com outro número`,
+        if (smsAttempt >= PHONE_PLACEHOLDER_IN_SESSION_ATTEMPTS) {
+          await ctx.recordStep("PHONE_PROBLEM", {
+            smsRejects: smsAttempt,
+            phoneLast4: phone.replace(/\D/g, "").slice(-4),
+          });
+          refusePhoneProblem(
+            `Problema celular: Uber pediu OTP SMS em ${smsAttempt} números — recusado para tentar depois com outros números`,
           );
         }
 
         try {
           await restartPhoneEntryAfterSms(page, config);
         } catch {
-          throw new AutomationTechnicalError(
-            "PHONE_SMS_RETRY",
-            `Não foi possível trocar o telefone após SMS (tentativa ${offset + attempt}) — reiniciando processo`,
+          await ctx.recordStep("PHONE_PROBLEM", {
+            smsRejects: smsAttempt,
+            reason: "restart_phone_entry_failed",
+            phoneLast4: phone.replace(/\D/g, "").slice(-4),
+          });
+          refusePhoneProblem(
+            `Problema celular: não foi possível trocar o telefone após SMS (tentativa ${smsAttempt}) — recusado para tentar depois`,
           );
         }
         continue;
@@ -1211,17 +1245,15 @@ export async function fillPhoneStep(ctx: RealStepContext): Promise<void> {
         try {
           await restartPhoneEntryAfterSms(page, config);
         } catch {
-          throw new AutomationTechnicalError(
-            "PHONE_SMS_RETRY",
-            "Tela de telefone sumiu após submit — reiniciando processo com outro número",
+          refusePhoneProblem(
+            "Problema celular: tela de telefone sumiu após submit — recusado para tentar depois com outros números",
           );
         }
       }
     }
 
-    throw new AutomationTechnicalError(
-      "PHONE_SMS_RETRY",
-      "Esgotou placeholders nesta sessão — reiniciando processo com outro número",
+    refusePhoneProblem(
+      "Problema celular: esgotou placeholders nesta sessão — recusado para tentar depois com outros números",
     );
   } catch (error) {
     if (error instanceof AutomationTechnicalError) throw error;
@@ -1244,9 +1276,10 @@ export async function fillPasswordStep(ctx: RealStepContext): Promise<void> {
     // atrasado / SMS residual.
     const outcome = await waitAfterPhoneSubmit(page, config.timeouts.elementWait);
     if (outcome === "sms") {
-      throw new AutomationTechnicalError(
-        "PHONE_SMS_RETRY",
-        "Uber pediu OTP SMS antes da senha — reiniciando processo com outro número",
+      throw new AutomationPauseSignal(
+        "PHONE_PROBLEM",
+        undefined,
+        "Problema celular: Uber pediu OTP SMS antes da senha — recusado para tentar depois com outros números",
       );
     }
     if (outcome !== "password") {

@@ -4,7 +4,9 @@ import { authenticate } from "../middleware/auth";
 import {
   buildAutomationReport,
   buildAuditReport,
+  listVerificationReport,
   type ReportPeriod,
+  type VerificationProviderFilter,
 } from "../services/reports.service";
 import { toCsv } from "../lib/csv";
 import { renderReportPdf } from "../lib/pdf";
@@ -50,6 +52,27 @@ reportsRouter.get("/audit", async (req, res, next) => {
   try {
     const period = resolvePeriod(periodQuerySchema.parse(req.query));
     const report = await buildAuditReport(req.user!.companyId, period);
+    return res.json({ success: true, data: report });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+const verificationQuerySchema = z.object({
+  provider: z.enum(["socure", "veriff", "all"]).default("socure"),
+});
+
+/**
+ * BI de verificação: lista motoristas com foto/CNH detectados.
+ * Filtro padrão = socure (foto ou CNH). Inclui ids para download de cookies.
+ */
+reportsRouter.get("/verification", async (req, res, next) => {
+  try {
+    const { provider } = verificationQuerySchema.parse(req.query);
+    const report = await listVerificationReport(
+      req.user!.companyId,
+      provider as VerificationProviderFilter,
+    );
     return res.json({ success: true, data: report });
   } catch (error) {
     return next(error);

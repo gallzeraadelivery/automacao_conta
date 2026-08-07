@@ -10,6 +10,7 @@ const NAV_ITEMS = [
   { href: "/dashboard/applicants", label: "Motoristas" },
   { href: "/dashboard/emails", label: "E-mails" },
   { href: "/dashboard/proxies", label: "Proxies" },
+  { href: "/dashboard/reports/socure", label: "Relatório Socure" },
   { href: "/dashboard/reports/automation", label: "Relatório de Automação" },
   { href: "/dashboard/reports/audit", label: "Relatório de Auditoria" },
 ];

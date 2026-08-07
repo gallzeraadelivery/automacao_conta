@@ -41,6 +41,7 @@ const ERROR_MESSAGES: Record<string, string> = {
   CONNECTION_FAILURE: "Falha de conexão (falha técnica)",
   PAGE_UNAVAILABLE: "Página indisponível (falha técnica)",
   PHONE_SMS_RETRY: "Erro de SMS / telefone (retentável)",
+  PHONE_PROBLEM: "Problema celular (tentar depois com outros números)",
   LOAD_ERROR: "Erro ao carregar página (falha técnica)",
   PROXY_UNAVAILABLE: "Proxy indisponível (falha técnica)",
   UNKNOWN: "Motivo não classificado",
@@ -217,4 +218,82 @@ export async function buildAuditReport(
     actionsByOperator,
     securityEvents,
   };
+}
+
+export type VerificationProviderFilter = "socure" | "veriff" | "all";
+
+export interface VerificationReportRow {
+  id: string;
+  externalId: string;
+  fullName: string;
+  email: string;
+  status: string;
+  pauseReason: string | null;
+  currentStep: string | null;
+  profilePhotoProvider: string | null;
+  profilePhotoConfidence: string | null;
+  driverLicenseProvider: string | null;
+  driverLicenseConfidence: string | null;
+  pausedAt: Date | null;
+  updatedAt: Date;
+}
+
+export interface VerificationReport {
+  filter: VerificationProviderFilter;
+  counts: { socure: number; veriff: number; all: number };
+  total: number;
+  items: VerificationReportRow[];
+}
+
+function hasProvider(row: VerificationReportRow, code: string): boolean {
+  return row.profilePhotoProvider === code || row.driverLicenseProvider === code;
+}
+
+/**
+ * Lista motoristas com probe de verificação (foto/CNH) para o BI Socure.
+ * Filtro padrão: pelo menos um provedor = SOCURE.
+ */
+export async function listVerificationReport(
+  companyId: string,
+  filter: VerificationProviderFilter = "socure",
+): Promise<VerificationReport> {
+  const rows = await db
+    .select({
+      id: applicants.id,
+      externalId: applicants.externalId,
+      fullName: applicants.fullName,
+      email: applicants.email,
+      status: applicants.status,
+      pauseReason: applicants.pauseReason,
+      currentStep: applicants.currentStep,
+      profilePhotoProvider: applicants.profilePhotoProvider,
+      profilePhotoConfidence: applicants.profilePhotoConfidence,
+      driverLicenseProvider: applicants.driverLicenseProvider,
+      driverLicenseConfidence: applicants.driverLicenseConfidence,
+      pausedAt: applicants.pausedAt,
+      updatedAt: applicants.updatedAt,
+    })
+    .from(applicants)
+    .where(
+      and(
+        eq(applicants.companyId, companyId),
+        sql`(${applicants.profilePhotoProvider} is not null or ${applicants.driverLicenseProvider} is not null)`,
+      ),
+    )
+    .orderBy(desc(applicants.updatedAt));
+
+  const counts = { socure: 0, veriff: 0, all: rows.length };
+  for (const row of rows) {
+    if (hasProvider(row, "SOCURE")) counts.socure += 1;
+    if (hasProvider(row, "VERIFF")) counts.veriff += 1;
+  }
+
+  const items =
+    filter === "all"
+      ? rows
+      : filter === "socure"
+        ? rows.filter((row) => hasProvider(row, "SOCURE"))
+        : rows.filter((row) => hasProvider(row, "VERIFF"));
+
+  return { filter, counts, total: items.length, items };
 }

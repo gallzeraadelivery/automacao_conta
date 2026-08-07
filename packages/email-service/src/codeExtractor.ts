@@ -37,6 +37,11 @@ export interface CodeFilterCriteria {
    */
   expectedRecipient?: string;
   usedCodes?: Set<string>;
+  /**
+   * Confiança mínima aceita. Padrão: MEDIUM — LOW em catch-all costuma ser
+   * lixo (ex: ****00) e a Uber rejeita o passcode.
+   */
+  minConfidence?: CodeConfidence;
 }
 
 export interface CodeCandidate {
@@ -95,17 +100,26 @@ function extractCode(text: string): { code: string; nearKeyword: boolean } | nul
   return null;
 }
 
+const CONFIDENCE_RANK: Record<CodeConfidence, number> = {
+  LOW: 1,
+  MEDIUM: 2,
+  HIGH: 3,
+};
+
 /**
  * Filtra e escolhe o melhor candidato a codigo de verificacao entre varias
  * mensagens. Deliberadamente NAO usa apenas "a mensagem mais recente":
  * elimina mensagens antigas (antes de requestedAt), encaminhamentos, codigos
- * ja usados, e prioriza remetente/assunto batendo com o esperado.
+ * ja usados, confiança LOW (lixo comum em catch-all), e prioriza
+ * remetente/assunto batendo com o esperado.
  */
 export function extractVerificationCode(
   messages: GmailMessage[],
   criteria: CodeFilterCriteria,
 ): CodeCandidate | null {
   const usedCodes = criteria.usedCodes ?? new Set<string>();
+  const minConfidence = criteria.minConfidence ?? "MEDIUM";
+  const minRank = CONFIDENCE_RANK[minConfidence];
 
   const candidates: Array<CodeCandidate & { receivedAt: Date; score: number }> = [];
 
@@ -146,6 +160,12 @@ export function extractVerificationCode(
     if (score >= 6) confidence = "HIGH";
     else if (score >= 3) confidence = "MEDIUM";
     else confidence = "LOW";
+
+    // Catch-all / caixa compartilhada: LOW quase sempre é número genérico
+    // (****00 etc.) — Uber rejeita e queima a rodada de Resend.
+    if (CONFIDENCE_RANK[confidence] < minRank) {
+      continue;
+    }
 
     candidates.push({
       code: extracted.code,

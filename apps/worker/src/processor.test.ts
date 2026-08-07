@@ -180,6 +180,36 @@ describe("processAutomationJob", () => {
     expect(actions).not.toContain("automation_job_paused");
   });
 
+  it("marks PHONE_PROBLEM as FAILED (not pending) so the queue continues", async () => {
+    const markFailed = vi.fn();
+    const markAwaitingHumanAction = vi.fn();
+    const deps = {
+      ...buildDeps({
+        emailVerificationWorker: {
+          findVerificationCode: vi.fn(),
+          handleSecurityChallenge: vi.fn(),
+        },
+        applicantStatusRepository: { markAwaitingHumanAction, markFailed },
+      }),
+      runAdministrativeFlow: async () => {
+        throw new NonRetryableAutomationError(
+          "PHONE_PROBLEM",
+          "Problema celular: Uber pediu OTP SMS em 2 números",
+        );
+      },
+    };
+    const job = new FakeJob(baseJobData({ currentStep: "RUN_ADMINISTRATIVE_FLOW" }));
+
+    await expect(processAutomationJob(job, deps)).rejects.toThrow(NonRetryableAutomationError);
+
+    expect(job.discarded).toBe(true);
+    expect(markFailed).toHaveBeenCalledWith("applicant-1", "PHONE_PROBLEM");
+    expect(markAwaitingHumanAction).not.toHaveBeenCalled();
+    const actions = deps.sink.mock.calls.map((c) => c[0].action);
+    expect(actions).toContain("automation_job_phone_problem");
+    expect(actions).not.toContain("automation_job_paused");
+  });
+
   it("pauses (does not retry) when the email worker reports a security challenge", async () => {
     const emailVerificationWorker: IEmailVerificationWorker = {
       findVerificationCode: vi

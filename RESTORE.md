@@ -13,9 +13,52 @@ git branch -a | grep backup/
 
 ---
 
-## ATUAL — Fluxo completo Veriff/Socure (2026-08-06)
+## ATUAL — Phone OTP hardening (2026-08-06)
 
-**Use este** se quiser o fluxo validado: signup Delivery do zero até Driver requirements + probe, com cookies AdsPower e sessão Electron isolada.
+**Use este** se quiser o estado pós-lote Veriff com endurecimento de OTP/SMS, base de telefone nova e relatório Socure.
+
+| Item | Valor |
+|------|--------|
+| **Nome legível** | Phone OTP hardening |
+| **Tag** | `restore/phone-otp-hardening-2026-08-06` |
+| **Branch de backup** | `backup/phone-otp-hardening-2026-08-06` |
+| **Commit da feature** | tip da tag (`git rev-parse restore/phone-otp-hardening-2026-08-06`) |
+| **Branch principal** | `claude/sistema-6-fases-iuzzhr` |
+| **Data** | 2026-08-06 |
+
+### O que inclui (resumo)
+
+- Tudo do restore Veriff anterior (Electron isolado, Welcome back, cookies AdsPower, lote 25/25)
+- Extrator IMAP: confiança mínima **MEDIUM** (ignora LOW do catch-all)
+- SMS: até 2 placeholders → `PHONE_PROBLEM` (FAILED, tenta depois); blacklist de números
+- Base placeholder: `5613265300` → `(561) 326-5300`…
+- Xvfb: entrypoint valida display vivo / limpa lock morto
+- Relatório BI Socure (`/dashboard/reports/socure`) + download cookies
+
+### Como inspecionar / rodar este ponto
+
+```bash
+git fetch origin --tags
+git checkout backup/phone-otp-hardening-2026-08-06
+# ou só olhar o commit:
+git show restore/phone-otp-hardening-2026-08-06 --stat
+```
+
+### Como voltar a branch principal para este ponto
+
+```bash
+git fetch origin --tags
+git checkout claude/sistema-6-fases-iuzzhr
+git reset --hard restore/phone-otp-hardening-2026-08-06
+# só se quiser publicar o reset (CUIDADO):
+# git push --force-with-lease origin claude/sistema-6-fases-iuzzhr
+```
+
+---
+
+## ANTERIOR — Fluxo completo Veriff/Socure (2026-08-06)
+
+Signup Delivery do zero até Driver requirements + probe; cookies AdsPower; sessão Electron isolada. **Antes** do endurecimento OTP/SMS e da base `326-5300`.
 
 | Item | Valor |
 |------|--------|
@@ -26,33 +69,10 @@ git branch -a | grep backup/
 | **Branch principal** | `claude/sistema-6-fases-iuzzhr` |
 | **Data** | 2026-08-06 |
 
-### O que inclui (resumo)
-
-- Electron com `user-data-dir` **por motorista** (sem vazamento de sessão)
-- Catch-all `mailsproton.com` → Spacemail IMAP
-- Pós-conta: Welcome back (opcional) → Complete next steps → Got It → Delivery with car
-- Cidade Earn (Orlando autocomplete) + docs → probe Veriff/Socure
-- Persistência de cookies: fallback se `storageState` falhar no Electron
-- API monta o mesmo volume de perfis do worker + download AdsPower
-- Validado em lote (25/25 até `AWAITING_HUMAN_ACTION`)
-
-### Como inspecionar / rodar este ponto
-
 ```bash
 git fetch origin --tags
 git checkout backup/fluxo-completo-veriff-2026-08-06
-# ou só olhar o commit:
 git show restore/fluxo-completo-veriff-2026-08-06 --stat
-```
-
-### Como voltar a branch principal para este ponto
-
-```bash
-git fetch origin --tags
-git checkout claude/sistema-6-fases-iuzzhr
-git reset --hard restore/fluxo-completo-veriff-2026-08-06
-# só se quiser publicar o reset (CUIDADO):
-# git push --force-with-lease origin claude/sistema-6-fases-iuzzhr
 ```
 
 ---
@@ -111,7 +131,8 @@ git reset --hard restore/socure-stable-2026-08-04
 
 | Quero… | Tag / branch |
 |--------|----------------|
-| Fluxo completo validado (agora) | `restore/fluxo-completo-veriff-2026-08-06` / `backup/fluxo-completo-veriff-2026-08-06` |
+| Phone OTP hardening (agora) | `restore/phone-otp-hardening-2026-08-06` / `backup/phone-otp-hardening-2026-08-06` |
+| Fluxo completo Veriff (lote 25/25) | `restore/fluxo-completo-veriff-2026-08-06` / `backup/fluxo-completo-veriff-2026-08-06` |
 | Stack Electron + Android (2026-08-05) | `restore/electron-android-2026-08-05` / `backup/electron-android-2026-08-05` |
 | Última versão estável pré-Electron (Socure) | `restore/socure-stable-2026-08-04` / `backup/socure-stable-2026-08-04` |
 | Lista de todos os restores | `git tag -l 'restore/*'` |

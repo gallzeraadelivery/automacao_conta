@@ -65,7 +65,7 @@ export interface UberAutomationRunnerOptions {
 const MAX_SESSION_ROTATIONS = 6;
 
 /** Placeholders por sessão em fillPhoneStep — offset avança a cada rotação. */
-const PHONE_ATTEMPTS_PER_SESSION = 3;
+const PHONE_ATTEMPTS_PER_SESSION = 2;
 
 /**
  * Mapeia `AutomationErrorInfo.code` (livre, definido em cada step de
@@ -169,30 +169,20 @@ function isLoadError(result: AutomationResult): boolean {
   return result.status === "ERROR" && result.error?.code === "LOAD_ERROR";
 }
 
-/** OTP SMS no 555 — reinicia fluxo com outro placeholder (não pausa humano). */
-function isPhoneSmsRetry(result: AutomationResult): boolean {
-  return result.status === "ERROR" && result.error?.code === "PHONE_SMS_RETRY";
-}
-
 /** IMAP zerou na tela OTP após Resend — sessão nova (e-mail pode ter travado). */
 function isEmailCodeRetry(result: AutomationResult): boolean {
   return result.status === "ERROR" && result.error?.code === "EMAIL_CODE_RETRY";
 }
 
 function isRotatableSessionFailure(result: AutomationResult): boolean {
-  return (
-    isCaptchaPause(result) ||
-    isLoadError(result) ||
-    isPhoneSmsRetry(result) ||
-    isEmailCodeRetry(result)
-  );
+  // PHONE_PROBLEM / SMS NÃO rotacionam: 2 números ruins → FAILED e próximo da fila.
+  return isCaptchaPause(result) || isLoadError(result) || isEmailCodeRetry(result);
 }
 
 function rotationReason(
   result: AutomationResult,
-): "CAPTCHA" | "LOAD_ERROR" | "PHONE_SMS_RETRY" | "EMAIL_CODE_RETRY" {
+): "CAPTCHA" | "LOAD_ERROR" | "EMAIL_CODE_RETRY" {
   if (isEmailCodeRetry(result)) return "EMAIL_CODE_RETRY";
-  if (isPhoneSmsRetry(result)) return "PHONE_SMS_RETRY";
   if (isLoadError(result)) return "LOAD_ERROR";
   return "CAPTCHA";
 }
@@ -209,9 +199,10 @@ function rotationReason(
  *   ignorado nesse modo (o adaptador gera a própria senha a partir do
  *   sobrenome do motorista; não há login numa conta pré-existente).
  *
- * Em CAPTCHA / LOAD_ERROR / PHONE_SMS_RETRY / EMAIL_CODE_RETRY: limpa perfil e
- * avança fingerprint no Redis (exceto se a conta Uber já foi criada — aí nunca
- * apaga cookies). Índice persiste entre retries BullMQ para não repetir o FP 0.
+/**
+ * Em CAPTCHA / LOAD_ERROR / EMAIL_CODE_RETRY: limpa perfil e avança
+ * fingerprint. SMS esgotado (2 números) vira PHONE_PROBLEM (não rotaciona).
+ * Índice persiste entre retries BullMQ para não repetir o FP 0.
  */
 export function createUberAutomationRunner(
   options: UberAutomationRunnerOptions,
@@ -669,6 +660,14 @@ function handleResult(result: AutomationResult, screenshotPath?: string): void {
   if (result.status === "SUCCESS") return;
 
   const screenshotSuffix = screenshotPath ? ` [screenshot: ${screenshotPath}]` : "";
+
+  // Legado PHONE_SMS_RETRY → mesmo tratamento de PHONE_PROBLEM (não retenta em loop).
+  if (result.status === "ERROR" && result.error?.code === "PHONE_SMS_RETRY") {
+    throw new NonRetryableAutomationError(
+      "PHONE_PROBLEM",
+      (result.error.message ?? "Problema celular") + screenshotSuffix,
+    );
+  }
 
   if (result.status === "PAUSED" || result.status === "VERIFICATION_DETECTED") {
     const v = result.verificationDetected;

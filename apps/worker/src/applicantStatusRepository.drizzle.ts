@@ -80,6 +80,7 @@ export class DrizzleApplicantStatusRepository implements ApplicantStatusReposito
         pauseReason: reason,
         pausedAt: new Date(),
         updatedAt: new Date(),
+        ...(reason === "PHONE_PROBLEM" ? { currentStep: "PHONE_PROBLEM" } : {}),
       })
       .where(eq(applicants.id, applicantId));
   }

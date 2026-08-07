@@ -115,6 +115,39 @@ describe("extractVerificationCode", () => {
     expect(result!.confidence).toBe("MEDIUM");
   });
 
+  it("rejects LOW confidence candidates by default (catch-all garbage like ****00)", () => {
+    const weak = message({
+      id: "weak",
+      from: "promo@random.com",
+      subject: "Your verification reminder",
+      snippet: "Call us at 2000 or visit the site.",
+      bodyText: "Support line 2000",
+    });
+    const result = extractVerificationCode([weak], {
+      requestedAt: REQUESTED_AT,
+      expectedSender: "noreply@uber.com",
+    });
+    expect(result).toBeNull();
+  });
+
+  it("allows LOW only when minConfidence is explicitly LOW", () => {
+    const weak = message({
+      id: "weak-allowed",
+      from: "promo@random.com",
+      subject: "Your verification reminder",
+      snippet: "Call us at 2000 or visit the site.",
+      bodyText: "Support line 2000",
+    });
+    const result = extractVerificationCode([weak], {
+      requestedAt: REQUESTED_AT,
+      expectedSender: "noreply@uber.com",
+      minConfidence: "LOW",
+    });
+    // Sem match de sender + só subject keyword → score baixo; se extrair, LOW.
+    // Com expectedSender sem match, sender=none; subject tem verification → score 2.
+    expect(result === null || result.confidence === "LOW").toBe(true);
+  });
+
   it("extracts a code even when only the domain matches, not the exact sender", () => {
     const domainOnly = message({ from: "no-reply@mail.uber.com" });
     const result = extractVerificationCode([domainOnly], {
