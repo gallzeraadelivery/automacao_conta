@@ -5,7 +5,9 @@ import type { Page } from "playwright";
 import { earnCityUi, looksLikeAuthGate, looksLikeBonjourChrome, looksLikeUberHub, softGoto } from "./HubSessionSteps";
 
 /** Mesmo padrão de AccountCreationSteps + CTA "Join now" da tela Earn. */
-const PRIMARY_NEXT_NAME = /^(continuar|continue|next|pr[oó]ximo|join now)(\s*→)?$/i;
+/** CTA de avançar: fluxos antigos (Continue/Next/Join now) + novo "Let's go". */
+const PRIMARY_NEXT_NAME =
+  /^(continuar|continue|next|pr[oó]ximo|join now|let['’]?s go)(\s*→)?$/i;
 
 /**
  * Banner "We use cookies" (Accept / Reject / Cookie settings) - bloqueia
@@ -1024,7 +1026,7 @@ export async function confirmEarningLocationStep(ctx: RealStepContext): Promise<
     if (!(await nextButton.isEnabled().catch(() => false))) {
       throw new AutomationTechnicalError(
         "ELEMENT_TIMEOUT",
-        `Next/Join now da cidade ainda disabled após selecionar "${city}" — retentar`,
+        `Botão de avançar (Next/Join now/Let's go) ainda disabled após selecionar "${city}" — retentar`,
       );
     }
 

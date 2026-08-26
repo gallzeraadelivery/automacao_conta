@@ -12,7 +12,9 @@ import { dismissCookieBannerIfPresent } from "./PreferencesSteps";
  * "Continuar" e "Next →" (com seta). `$` evita casar "Continue with Google"
  * / "Continue with Apple" / "Continue with Email".
  */
-const PRIMARY_NEXT_NAME = /^(continuar|continue|next|pr[oó]ximo|join now)(\s*→)?$/i;
+/** CTA de avançar: fluxos antigos + "Let's go" (earn / signup). */
+const PRIMARY_NEXT_NAME =
+  /^(continuar|continue|next|pr[oó]ximo|join now|let['’]?s go)(\s*→)?$/i;
 
 async function clickPrimaryNext(ctx: RealStepContext, timeout: number): Promise<void> {
   const btn = ctx.page.getByRole("button", { name: PRIMARY_NEXT_NAME }).first();
