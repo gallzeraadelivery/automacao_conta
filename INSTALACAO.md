@@ -14,7 +14,7 @@ Na prática: só clicar em **INSTALAR-…**. O script tenta instalar sozinho:
 | Node.js 20+ | **nvm no usuário (sem sudo)** | Instala LTS via **winget** |
 | pnpm | Via corepack/npm do usuário | Via corepack / npm |
 
-**Mac — senha de administrador:** na 1ª instalação o sistema pede senha para colocar o **Docker Desktop**. Node/pnpm não precisam de sudo. Digite a senha do Mac e continue.
+**Mac — senha de administrador:** o instalador chama **`sudo` sozinho** no começo se faltar Docker/Homebrew e pede a senha **uma vez**. Não dá para gravar a senha no script (segurança do macOS). Node/pnpm não usam sudo.
 
 **Windows:** na 1ª instalação do Docker pode pedir **WSL2** e/ou **reiniciar o PC** — depois rode `INSTALAR-Windows.bat` de novo.
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Instalação automática no macOS.
-# Pode pedir senha de administrador 1x (Docker Desktop / Homebrew).
-# Node/pnpm tentam instalar no usuário (sem sudo) quando possível.
+# Chama `sudo` no início (pede senha 1x) quando Docker/Homebrew faltam.
+# Node/pnpm instalam no usuário (sem sudo).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -10,10 +10,66 @@ cd "$ROOT"
 echo "==> Uber Automation — instalação (macOS)"
 echo "    Pasta: $ROOT"
 echo
-echo "    AVISO: o Mac pode pedir a SENHA DE ADMINISTRADOR uma vez"
-echo "    (necessário para instalar Docker Desktop e/ou Homebrew)."
-echo "    Node e pnpm tentamos instalar sem sudo."
-echo
+
+# Mantém o ticket do sudo vivo enquanto o instalador roda (padrão Homebrew).
+SUDO_KEEPALIVE_PID=""
+start_sudo_keepalive() {
+  # Renova a cada 50s enquanto este script existir
+  (
+    while true; do
+      sudo -n true 2>/dev/null || exit 0
+      sleep 50
+      kill -0 "$$" 2>/dev/null || exit 0
+    done
+  ) &
+  SUDO_KEEPALIVE_PID=$!
+}
+stop_sudo_keepalive() {
+  if [[ -n "${SUDO_KEEPALIVE_PID}" ]]; then
+    kill "${SUDO_KEEPALIVE_PID}" 2>/dev/null || true
+  fi
+}
+trap stop_sudo_keepalive EXIT
+
+# Pede senha de admin UMA vez via `sudo` (não dá para gravar a senha no script).
+ensure_sudo_once() {
+  if sudo -n true 2>/dev/null; then
+    echo "    sudo: já autenticado"
+    start_sudo_keepalive
+    return 0
+  fi
+  echo "==> Solicitando acesso de administrador (sudo)..."
+  echo "    Digite a senha do Mac quando pedir (não aparece na tela)."
+  echo "    Necessário para instalar Docker Desktop / Homebrew."
+  echo
+  if ! sudo -v; then
+    echo "ERRO: sem sudo não dá para instalar o Docker neste Mac."
+    exit 1
+  fi
+  start_sudo_keepalive
+  echo "    sudo OK"
+  echo
+}
+
+needs_admin_install=0
+if ! command -v docker >/dev/null 2>&1; then
+  needs_admin_install=1
+fi
+# Homebrew em Mac Apple Silicon / Intel
+if ! command -v brew >/dev/null 2>&1 \
+  && [[ ! -x /opt/homebrew/bin/brew ]] \
+  && [[ ! -x /usr/local/bin/brew ]]; then
+  if [[ "$needs_admin_install" -eq 1 ]]; then
+    needs_admin_install=1
+  fi
+fi
+
+if [[ "$needs_admin_install" -eq 1 ]]; then
+  ensure_sudo_once
+else
+  echo "    Docker já presente — sudo não necessário nesta etapa."
+  echo
+fi
 
 append_brew_path() {
   if [[ -x /opt/homebrew/bin/brew ]]; then
