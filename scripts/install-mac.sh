@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Instalação automática no macOS.
-# Instala o que faltar (Homebrew, Docker Desktop, Node, pnpm) e sobe o stack.
+# Pode pedir senha de administrador 1x (Docker Desktop / Homebrew).
+# Node/pnpm tentam instalar no usuário (sem sudo) quando possível.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -8,6 +9,10 @@ cd "$ROOT"
 
 echo "==> Uber Automation — instalação (macOS)"
 echo "    Pasta: $ROOT"
+echo
+echo "    AVISO: o Mac pode pedir a SENHA DE ADMINISTRADOR uma vez"
+echo "    (necessário para instalar Docker Desktop e/ou Homebrew)."
+echo "    Node e pnpm tentamos instalar sem sudo."
 echo
 
 append_brew_path() {
@@ -18,34 +23,103 @@ append_brew_path() {
   fi
 }
 
-# --- Homebrew (base para Docker/Node no Mac) ---
-if ! command -v brew >/dev/null 2>&1; then
-  echo "==> Homebrew não encontrado. Instalando..."
-  NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-  append_brew_path
-fi
-append_brew_path
+load_nvm() {
+  export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
+  # shellcheck disable=SC1091
+  [[ -s "$NVM_DIR/nvm.sh" ]] && . "$NVM_DIR/nvm.sh"
+}
 
-if ! command -v brew >/dev/null 2>&1; then
-  echo "ERRO: Homebrew não ficou disponível no PATH."
-  echo "Abra um Terminal novo e rode de novo: INSTALAR-Mac.command"
-  exit 1
-fi
+ensure_node_user() {
+  if command -v node >/dev/null 2>&1; then
+    local major
+    major="$(node -p "process.versions.node.split('.')[0]" 2>/dev/null || echo 0)"
+    if [[ "$major" -ge 20 ]]; then
+      echo "    Node $(node -v) (já instalado)"
+      return 0
+    fi
+  fi
 
-# --- Docker Desktop ---
+  echo "==> Instalando Node.js 22 no seu usuário (nvm — sem sudo)..."
+  export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
+  if [[ ! -s "$NVM_DIR/nvm.sh" ]]; then
+    curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash
+  fi
+  load_nvm
+  nvm install 22
+  nvm alias default 22
+  hash -r 2>/dev/null || true
+
+  if ! command -v node >/dev/null 2>&1; then
+    echo "ERRO: Node não ficou disponível após nvm."
+    exit 1
+  fi
+  echo "    Node $(node -v)"
+}
+
+ensure_pnpm() {
+  load_nvm 2>/dev/null || true
+  if command -v pnpm >/dev/null 2>&1; then
+    echo "    pnpm $(pnpm -v)"
+    return 0
+  fi
+
+  echo "==> Instalando pnpm (sem sudo, via corepack/npm do Node do usuário)..."
+  if command -v corepack >/dev/null 2>&1; then
+    # corepack enable às vezes pede sudo no Node do sistema — tenta sem; se falhar usa npm -g no prefix do usuário
+    if ! corepack enable 2>/dev/null; then
+      mkdir -p "$HOME/.local/bin"
+      npm config set prefix "$HOME/.local"
+      export PATH="$HOME/.local/bin:$PATH"
+      npm install -g pnpm@10.33.0
+    else
+      corepack prepare pnpm@10.33.0 --activate
+    fi
+  else
+    mkdir -p "$HOME/.local/bin"
+    npm config set prefix "$HOME/.local"
+    export PATH="$HOME/.local/bin:$PATH"
+    npm install -g pnpm@10.33.0
+  fi
+
+  # Garante PATH para esta sessão
+  export PATH="$HOME/.local/bin:$PATH"
+  load_nvm 2>/dev/null || true
+
+  if ! command -v pnpm >/dev/null 2>&1; then
+    echo "ERRO: pnpm não ficou disponível."
+    exit 1
+  fi
+  echo "    pnpm $(pnpm -v)"
+}
+
+# --- Docker Desktop (precisa privilégio de admin na 1ª instalação) ---
 if ! command -v docker >/dev/null 2>&1; then
-  echo "==> Docker não encontrado. Instalando Docker Desktop..."
+  append_brew_path
+  if ! command -v brew >/dev/null 2>&1; then
+    echo "==> Homebrew não encontrado (usado para instalar o Docker)."
+    echo "    Vai pedir SENHA DE ADMINISTRADOR agora..."
+    NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+    append_brew_path
+  fi
+
+  if ! command -v brew >/dev/null 2>&1; then
+    echo "ERRO: Homebrew não ficou disponível."
+    echo "Instale o Docker Desktop manualmente: https://www.docker.com/products/docker-desktop/"
+    echo "Depois rode INSTALAR-Mac.command de novo."
+    exit 1
+  fi
+
+  echo "==> Instalando Docker Desktop (pode pedir senha de administrador)..."
   brew install --cask docker
 fi
 
-# Garante app aberto e daemon pronto (até ~3 min)
 if ! docker info >/dev/null 2>&1; then
   echo "==> Abrindo Docker Desktop e aguardando ficar pronto..."
   open -a Docker 2>/dev/null || open -a "Docker" 2>/dev/null || true
   READY=0
   for i in $(seq 1 90); do
     if docker info >/dev/null 2>&1; then
-      echo "    Docker OK (${i}x2s)"
+      echo "    Docker OK"
       READY=1
       break
     fi
@@ -53,57 +127,15 @@ if ! docker info >/dev/null 2>&1; then
   done
   if [[ "$READY" -ne 1 ]]; then
     echo "ERRO: Docker Desktop instalado, mas ainda não está Running."
-    echo "Abra o ícone da baleia na barra, complete o setup (se pedir) e rode INSTALAR-Mac.command de novo."
+    echo "Abra o ícone da baleia, complete o setup e rode INSTALAR-Mac.command de novo."
     exit 1
   fi
 fi
+echo "    Docker OK"
 
-# --- Node.js 20+ (janela Electron do painel) ---
-NEED_NODE=0
-if ! command -v node >/dev/null 2>&1; then
-  NEED_NODE=1
-else
-  NODE_MAJOR="$(node -p "process.versions.node.split('.')[0]" 2>/dev/null || echo 0)"
-  if [[ "$NODE_MAJOR" -lt 20 ]]; then
-    NEED_NODE=1
-  fi
-fi
-
-if [[ "$NEED_NODE" -eq 1 ]]; then
-  echo "==> Instalando Node.js 22 (Homebrew)..."
-  brew install node@22 2>/dev/null || brew install node
-  append_brew_path
-  # node@22 às vezes fica só em Cellar — linka se preciso
-  if ! command -v node >/dev/null 2>&1; then
-    brew link --overwrite --force node@22 2>/dev/null || true
-    append_brew_path
-  fi
-fi
-
-if ! command -v node >/dev/null 2>&1; then
-  echo "ERRO: Node.js não ficou disponível. Instale LTS em https://nodejs.org/ e rode de novo."
-  exit 1
-fi
-
-NODE_MAJOR="$(node -p "process.versions.node.split('.')[0]")"
-if [[ "$NODE_MAJOR" -lt 20 ]]; then
-  echo "ERRO: Node >= 20 necessário (atual: $(node -v))"
-  exit 1
-fi
-echo "    Node $(node -v)"
-
-# --- pnpm ---
-if ! command -v pnpm >/dev/null 2>&1; then
-  echo "==> Habilitando pnpm (corepack)..."
-  corepack enable || true
-  corepack prepare pnpm@10.33.0 --activate || npm install -g pnpm@10.33.0
-fi
-
-if ! command -v pnpm >/dev/null 2>&1; then
-  echo "ERRO: pnpm não ficou disponível."
-  exit 1
-fi
-echo "    pnpm $(pnpm -v)"
+# --- Node + pnpm (usuário, sem sudo) ---
+ensure_node_user
+ensure_pnpm
 
 # --- .env / chave ---
 if [[ ! -f .env ]]; then
@@ -117,7 +149,6 @@ if [[ ! -f .env ]]; then
     sed -i '' "s/replace-with-another-long-random-secret/${REFRESH}/" .env
     sed -i '' "s/replace-with-64-hex-characters-32-byte-key/${CRED}/" .env
   fi
-  echo "    Revise .env se precisar (proxies, IMAP, etc.)."
 fi
 
 if [[ ! -f .secrets.key ]]; then
@@ -125,11 +156,9 @@ if [[ ! -f .secrets.key ]]; then
   openssl rand -hex 32 > .secrets.key
 fi
 
-# --- Dependências do shell desktop ---
 echo "==> Instalando dependências do monorepo (painel em janela)..."
 pnpm install --frozen-lockfile || pnpm install
 
-# --- Stack Docker ---
 echo "==> Subindo stack Docker (postgres, redis, api, web, worker)..."
 docker compose -f infra/docker/docker-compose.yml up -d --build
 
@@ -141,7 +170,7 @@ for i in $(seq 1 60); do
   fi
   sleep 2
   if [[ "$i" -eq 60 ]]; then
-    echo "AVISO: API ainda não respondeu em /health — confira: docker compose -f infra/docker/docker-compose.yml logs api"
+    echo "AVISO: API ainda não respondeu — docker compose -f infra/docker/docker-compose.yml logs api"
   fi
 done
 
@@ -160,7 +189,6 @@ chmod +x \
 echo
 echo "=============================================="
 echo " Instalação concluída."
-echo " Para abrir o painel em JANELA:"
-echo "   • Clique duas vezes em: Iniciar-Mac.command"
+echo " Abrir painel: clique em Iniciar-Mac.command"
 echo " Login: admin@example.com / admin123"
 echo "=============================================="
