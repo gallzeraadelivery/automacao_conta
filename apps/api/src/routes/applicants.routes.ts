@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { z } from "zod";
+import { APPLICANT_STATUSES } from "@uber-automation/database";
 import { authenticate, requireRole } from "../middleware/auth";
 import { uploadSpreadsheet } from "../middleware/upload";
 import { HttpError } from "../middleware/errorHandler";
@@ -12,13 +13,17 @@ import {
   startAutomation,
   startAutomationBatch,
   deleteApplicant,
+  purgeVeriffApplicants,
   getUberCookiesExport,
+  setCookiesDownloaded,
+  exportUberCookiesZip,
   openManualBrowser,
   closeManualBrowser,
   stopAutomation,
   stopAllAutomations,
 } from "../services/applicants.service";
 import { validateEmailListImport, importEmailList } from "../services/emailListImport.service";
+import { generateAndEnqueueBatch } from "../services/generateBatch.service";
 import { logAudit } from "../services/auditLog.service";
 
 export const applicantsRouter = Router();
@@ -115,10 +120,15 @@ applicantsRouter.post(
   },
 );
 
+const emptyToUndef = (value: unknown) =>
+  value === "" || value === undefined || value === null ? undefined : value;
+
 const listQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
   pageSize: z.coerce.number().int().min(1).max(100).default(20),
-  status: z.string().optional(),
+  status: z.preprocess(emptyToUndef, z.enum(APPLICANT_STATUSES).optional()),
+  pauseReason: z.preprocess(emptyToUndef, z.string().trim().min(1).max(80).optional()),
+  q: z.preprocess(emptyToUndef, z.string().trim().min(1).max(120).optional()),
 });
 
 applicantsRouter.get("/", async (req, res, next) => {
@@ -135,6 +145,43 @@ const startAutomationBatchSchema = z.object({
   platformPassword: z.string().min(1, "Informe a senha de login da plataforma"),
   applicantIds: z.array(z.string().uuid()).optional(),
 });
+
+const generateBatchSchema = z.object({
+  count: z.coerce.number().int().min(1).max(100),
+});
+
+/**
+ * Gera N e-mails @mailsproton.com inéditos, importa e enfileira nos proxies ACTIVE.
+ * Senha Uber = Sobrenome@2026 (por motorista).
+ */
+applicantsRouter.post(
+  "/generate-batch",
+  requireRole("admin", "operator"),
+  async (req, res, next) => {
+    try {
+      const input = generateBatchSchema.parse(req.body);
+      const result = await generateAndEnqueueBatch(req.user!.companyId, input.count);
+
+      await logAudit({
+        companyId: req.user!.companyId,
+        operatorId: req.user!.operatorId,
+        action: "automation_generate_batch_requested",
+        metadata: {
+          requested: result.requested,
+          imported: result.imported,
+          enqueued: result.enqueued.length,
+          skipped: result.skipped.length,
+          activeProxyCount: result.activeProxyCount,
+          applicantIds: result.enqueued.map((e) => e.applicantId),
+        },
+      });
+
+      return res.status(202).json({ success: true, data: result });
+    } catch (error) {
+      return next(error);
+    }
+  },
+);
 
 /**
  * Start em massa: rodízio dos proxies ACTIVE; fila processa conforme
@@ -191,6 +238,27 @@ applicantsRouter.post(
   },
 );
 
+applicantsRouter.post(
+  "/purge-veriff",
+  requireRole("admin", "operator"),
+  async (req, res, next) => {
+    try {
+      const result = await purgeVeriffApplicants(req.user!.companyId);
+
+      await logAudit({
+        companyId: req.user!.companyId,
+        operatorId: req.user!.operatorId,
+        action: "purge_veriff_applicants",
+        metadata: result,
+      });
+
+      return res.json({ success: true, data: result });
+    } catch (error) {
+      return next(error);
+    }
+  },
+);
+
 applicantsRouter.get("/:id", async (req, res, next) => {
   try {
     const applicant = await getApplicantById(req.user!.companyId, req.params.id);
@@ -225,6 +293,39 @@ applicantsRouter.delete("/:id", requireRole("admin", "operator"), async (req, re
 });
 
 /**
+ * Marca cookies como baixados / não baixados (um ou vários).
+ * Body: { applicantIds: string[], downloaded: boolean }
+ */
+applicantsRouter.patch(
+  "/cookies-downloaded",
+  requireRole("admin", "operator"),
+  async (req, res, next) => {
+    try {
+      const body = z
+        .object({
+          applicantIds: z.array(z.string().uuid()).min(1),
+          downloaded: z.boolean(),
+        })
+        .parse(req.body);
+      const result = await setCookiesDownloaded(
+        req.user!.companyId,
+        body.applicantIds,
+        body.downloaded,
+      );
+      await logAudit({
+        companyId: req.user!.companyId,
+        operatorId: req.user!.operatorId,
+        action: body.downloaded ? "cookies_marked_downloaded" : "cookies_marked_not_downloaded",
+        metadata: { applicantIds: body.applicantIds, updated: result.updated },
+      });
+      return res.json({ success: true, data: result });
+    } catch (error) {
+      return next(error);
+    }
+  },
+);
+
+/**
  * Download cookies Uber para AdsPower.
  * - default / ?format=json → JSON array compacto (colar no campo Cookie)
  * - ?format=netscape → Netscape cookie file (alternativa)
@@ -249,6 +350,8 @@ applicantsRouter.get(
         action: "download_uber_cookies",
         metadata: { cookieCount: exported.cookieCount, format },
       });
+
+      await setCookiesDownloaded(req.user!.companyId, [applicantId], true);
 
       const safeName = exported.externalId.replace(/[^a-zA-Z0-9._-]/g, "_");
 

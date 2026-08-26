@@ -15,6 +15,34 @@
       "when": 1785422450279,
       "tag": "0001_lowly_slapstick",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1786059000000,
+      "tag": "0002_company_settings",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1786074000000,
+      "tag": "0003_proxy_geo",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1786360000000,
+      "tag": "0004_cookies_downloaded",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1787070000000,
+      "tag": "0005_used_emails",
+      "breakpoints": true
     }
   ]
 }

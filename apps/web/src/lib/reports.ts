@@ -9,6 +9,15 @@ export interface AutomationReport {
   providerDistribution: { socure: number; other: number; unknown: number };
   errorDistribution: Record<string, number>;
   topErrors: Array<{ code: string; count: number; message: string }>;
+  proxyGeoRows: Array<{
+    id: string;
+    externalId: string;
+    fullName: string;
+    status: string;
+    proxyExternalIp: string | null;
+    proxyGeoCity: string | null;
+    proxyGeoRegion: string | null;
+  }>;
 }
 
 export interface AuditReport {
@@ -33,6 +42,10 @@ export interface VerificationReportRow {
   profilePhotoConfidence: string | null;
   driverLicenseProvider: string | null;
   driverLicenseConfidence: string | null;
+  proxyExternalIp: string | null;
+  proxyGeoCity: string | null;
+  proxyGeoRegion: string | null;
+  cookiesDownloadedAt: string | null;
   pausedAt: string | null;
   updatedAt: string;
 }
@@ -42,6 +55,34 @@ export interface VerificationReport {
   counts: { socure: number; veriff: number; all: number };
   total: number;
   items: VerificationReportRow[];
+}
+
+export interface SocureProxyGeoCityRow {
+  city: string;
+  region: string;
+  total: number;
+  socure: number;
+  veriff: number;
+  identidade: number;
+  security: number;
+  phone: number;
+  pctSocure: number;
+  pctVeriff: number;
+}
+
+export interface SocureProxyGeoReport {
+  totals: {
+    withGeo: number;
+    cities: number;
+    socure: number;
+    veriff: number;
+    identidade: number;
+    security: number;
+    phone: number;
+  };
+  bySocure: SocureProxyGeoCityRow[];
+  byVeriff: SocureProxyGeoCityRow[];
+  bySocureRate: SocureProxyGeoCityRow[];
 }
 
 export function formatDuration(seconds: number): string {

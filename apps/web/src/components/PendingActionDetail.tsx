@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { apiDownload, apiRequest } from "@/lib/apiClient";
 import { isLiveProgressStatus, liveStepLabel } from "@/lib/liveProgress";
 import { pauseReasonLabel, type AuditLogEntry, type PendingActionView } from "@/lib/pendingActions";
+import { formatProxyGeoLabel } from "@/lib/proxyGeo";
 import { VerificationDetailsCard } from "./VerificationDetailsCard";
 import { DeliverToDriverModal } from "./DeliverToDriverModal";
 
@@ -205,6 +206,15 @@ export function PendingActionDetail({ id }: { id: string }) {
           <div>
             <dt className="text-slate-500">Cidade</dt>
             <dd className="text-slate-900">{item.city ?? "-"}</dd>
+          </div>
+          <div>
+            <dt className="text-slate-500">Cidade proxy (IP)</dt>
+            <dd className="text-slate-900" title={item.proxyExternalIp ?? undefined}>
+              {formatProxyGeoLabel(item.proxyGeoCity, item.proxyGeoRegion)}
+              {item.proxyExternalIp ? (
+                <span className="mt-0.5 block text-xs text-slate-400">{item.proxyExternalIp}</span>
+              ) : null}
+            </dd>
           </div>
           <div>
             <dt className="text-slate-500">Veículo</dt>

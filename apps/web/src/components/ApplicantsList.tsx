@@ -4,18 +4,60 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { apiDownload, apiRequest } from "@/lib/apiClient";
 import { isLiveProgressStatus, liveStepLabel } from "@/lib/liveProgress";
+import { pauseReasonLabel } from "@/lib/pendingActions";
+import { formatProxyGeoLabel } from "@/lib/proxyGeo";
 import { StartAutomationModal } from "./StartAutomationModal";
 import { StartBatchModal } from "./StartBatchModal";
+import { GenerateBatchModal } from "./GenerateBatchModal";
 
 interface ApplicantRow {
   id: string;
   externalId: string;
   fullName: string;
+  email?: string;
   status: string;
   pauseReason: string | null;
   currentStep: string | null;
+  proxyGeoCity?: string | null;
+  proxyGeoRegion?: string | null;
+  proxyExternalIp?: string | null;
   updatedAt?: string;
 }
+
+interface ApplicantsListResult {
+  items: ApplicantRow[];
+  page: number;
+  pageSize: number;
+  total: number;
+  totalPages: number;
+}
+
+const STATUS_FILTERS: Array<{ id: string; label: string }> = [
+  { id: "", label: "Todos os status" },
+  { id: "IN_PROGRESS", label: "Em andamento" },
+  { id: "READY_TO_START", label: "Pronto para iniciar" },
+  { id: "AWAITING_HUMAN_ACTION", label: "Aguardando humano" },
+  { id: "FAILED", label: "Falhou" },
+  { id: "CANCELLED", label: "Cancelado" },
+  { id: "COMPLETED", label: "Concluído" },
+  { id: "RESOLVED", label: "Resolvido" },
+  { id: "NEW", label: "Novo" },
+  { id: "CONSENT_PENDING", label: "Consentimento" },
+];
+
+const PAUSE_FILTERS: Array<{ id: string; label: string }> = [
+  { id: "", label: "Todos os motivos" },
+  { id: "NON_SOCURE_PROVIDER", label: "Veriff / outro provedor" },
+  { id: "PHONE_PROBLEM", label: "Problema celular" },
+  { id: "IDENTITY_VERIFICATION_REQUIRED", label: "Verificação de identidade" },
+  { id: "SECURITY_BLOCK", label: "Bloqueio de segurança" },
+  { id: "PAGE_UNAVAILABLE", label: "Página indisponível" },
+  { id: "CAPTCHA", label: "CAPTCHA" },
+  { id: "TWO_FACTOR", label: "2FA" },
+  { id: "REFUSED", label: "Recusado" },
+];
+
+const PAGE_SIZE_OPTIONS = [20, 50, 100] as const;
 
 const STATUS_STYLES: Record<string, string> = {
   NEW: "bg-slate-100 text-slate-700",
@@ -59,6 +101,7 @@ export function ApplicantsList() {
   const [loading, setLoading] = useState(false);
   const [selected, setSelected] = useState<ApplicantRow | null>(null);
   const [batchOpen, setBatchOpen] = useState(false);
+  const [generateOpen, setGenerateOpen] = useState(false);
   const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
@@ -66,18 +109,46 @@ export function ApplicantsList() {
   const [closingBrowserId, setClosingBrowserId] = useState<string | null>(null);
   const [stoppingId, setStoppingId] = useState<string | null>(null);
   const [stoppingAll, setStoppingAll] = useState(false);
+  const [purgingVeriff, setPurgingVeriff] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [livePolling, setLivePolling] = useState(false);
+  const [searchInput, setSearchInput] = useState("");
+  const [q, setQ] = useState("");
+  const [status, setStatus] = useState("");
+  const [pauseReason, setPauseReason] = useState("");
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState<(typeof PAGE_SIZE_OPTIONS)[number]>(20);
+  const [total, setTotal] = useState(0);
+  const [totalPages, setTotalPages] = useState(1);
 
-  const load = useCallback(async (opts?: { silent?: boolean }) => {
-    if (!opts?.silent) setLoading(true);
-    const result = await apiRequest<{ items: ApplicantRow[] }>("/api/applicants?pageSize=100");
-    if (!opts?.silent) setLoading(false);
-    if (result.success) {
+  const load = useCallback(
+    async (opts?: { silent?: boolean }) => {
+      if (!opts?.silent) setLoading(true);
+      const params = new URLSearchParams({
+        page: String(page),
+        pageSize: String(pageSize),
+      });
+      if (status) params.set("status", status);
+      if (pauseReason) params.set("pauseReason", pauseReason);
+      if (q) params.set("q", q);
+      const result = await apiRequest<ApplicantsListResult>(`/api/applicants?${params.toString()}`);
+      if (!opts?.silent) setLoading(false);
+      if (!result.success) return;
+      if (result.data.total > 0 && result.data.items.length === 0 && page > 1) {
+        setPage(1);
+        return;
+      }
       setApplicants(result.data.items);
-      setLivePolling(result.data.items.some((a) => isLiveProgressStatus(a.status)));
-    }
-  }, []);
+      setTotal(result.data.total);
+      setTotalPages(result.data.totalPages);
+      setLivePolling(
+        status === "" ||
+          status === "IN_PROGRESS" ||
+          result.data.items.some((a) => isLiveProgressStatus(a.status)),
+      );
+    },
+    [page, pageSize, status, pauseReason, q],
+  );
 
   const batchCandidates = useMemo(
     () =>
@@ -101,15 +172,31 @@ export function ApplicantsList() {
   }
 
   function toggleSelectAllBatch() {
-    if (allBatchSelected) {
-      setCheckedIds(new Set());
-      return;
-    }
-    setCheckedIds(new Set(batchCandidates.map((a) => a.id)));
+    setCheckedIds((prev) => {
+      const next = new Set(prev);
+      if (allBatchSelected) {
+        for (const applicant of batchCandidates) next.delete(applicant.id);
+        return next;
+      }
+      for (const applicant of batchCandidates) next.add(applicant.id);
+      return next;
+    });
   }
 
   useEffect(() => {
-    load();
+    const id = window.setTimeout(() => {
+      const next = searchInput.trim();
+      setQ((prev) => {
+        if (prev === next) return prev;
+        setPage(1);
+        return next;
+      });
+    }, 300);
+    return () => window.clearTimeout(id);
+  }, [searchInput]);
+
+  useEffect(() => {
+    void load();
   }, [load]);
 
   useEffect(() => {
@@ -120,10 +207,31 @@ export function ApplicantsList() {
     return () => window.clearInterval(id);
   }, [livePolling, load]);
 
-  const inProgressCount = useMemo(
-    () => applicants.filter((a) => a.status === "IN_PROGRESS").length,
-    [applicants],
-  );
+  const rangeStart = total === 0 ? 0 : (page - 1) * pageSize + 1;
+  const rangeEnd = Math.min(page * pageSize, total);
+
+  function applyStatus(next: string) {
+    setStatus(next);
+    setPage(1);
+  }
+
+  function applyPauseReason(next: string) {
+    setPauseReason(next);
+    setPage(1);
+  }
+
+  function applyPageSize(next: (typeof PAGE_SIZE_OPTIONS)[number]) {
+    setPageSize(next);
+    setPage(1);
+  }
+
+  function clearFilters() {
+    setSearchInput("");
+    setQ("");
+    setStatus("");
+    setPauseReason("");
+    setPage(1);
+  }
 
   async function handleDelete(applicant: ApplicantRow) {
     if (
@@ -223,7 +331,7 @@ export function ApplicantsList() {
   async function handleStopAll() {
     if (
       !window.confirm(
-        `Parar TODAS as automações?\n\nDrena a fila da empresa e fecha browsers ativos (${inProgressCount} em andamento).`,
+        "Parar TODAS as automações?\n\nDrena a fila da empresa e fecha browsers ativos.",
       )
     ) {
       return;
@@ -247,16 +355,59 @@ export function ApplicantsList() {
     }
   }
 
+  async function handlePurgeVeriff() {
+    if (
+      !window.confirm(
+        "Apagar TODOS os Veriff?\n\nSocure permanece. Os e-mails ficam gravados e não poderão ser reimportados. Perfis, cookies e screenshots desses motoristas são removidos.",
+      )
+    ) {
+      return;
+    }
+    setActionError(null);
+    setPurgingVeriff(true);
+    try {
+      const result = await apiRequest<{ deleted: number; emailsReserved: number }>(
+        "/api/applicants/purge-veriff",
+        { method: "POST", body: JSON.stringify({}) },
+      );
+      if (result.success) {
+        window.alert(
+          `Veriff apagados: ${result.data.deleted}. E-mails reservados: ${result.data.emailsReserved}.`,
+        );
+        await load({ silent: true });
+      } else {
+        const msg = result.error.message || result.error.code || "Falha ao apagar Veriff";
+        setActionError(msg);
+        window.alert(`Erro ao apagar Veriff: ${msg}`);
+      }
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      setActionError(msg);
+      window.alert(`Erro ao apagar Veriff: ${msg}`);
+    } finally {
+      setPurgingVeriff(false);
+    }
+  }
+
   return (
     <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <div>
           <h2 className="text-sm font-semibold text-slate-900">Motoristas importados</h2>
-          {livePolling && (
-            <p className="mt-0.5 text-xs text-blue-600">Atualizando progresso a cada 3s…</p>
-          )}
+          <p className="mt-0.5 text-xs text-slate-500">
+            {total} motorista{total === 1 ? "" : "s"}
+            {livePolling ? " · atualizando a cada 3s" : ""}
+          </p>
         </div>
         <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setGenerateOpen(true)}
+            className="rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-700"
+            title="Gera e-mails @mailsproton.com novos e enfileira (Senha Sobrenome@2026)"
+          >
+            Gerar e enfileirar
+          </button>
           <button
             type="button"
             onClick={() => setBatchOpen(true)}
@@ -264,6 +415,15 @@ export function ApplicantsList() {
           >
             Start lote
             {checkedIds.size > 0 ? ` (${checkedIds.size})` : ""}
+          </button>
+          <button
+            type="button"
+            disabled={purgingVeriff}
+            onClick={() => void handlePurgeVeriff()}
+            className="rounded-md border border-amber-400 bg-amber-50 px-3 py-1.5 text-xs font-medium text-amber-800 hover:bg-amber-100 disabled:opacity-50"
+            title="Apaga motoristas Veriff; Socure fica; e-mails não podem ser reusados"
+          >
+            {purgingVeriff ? "Apagando Veriff…" : "Apagar todos os Veriff"}
           </button>
           <button
             type="button"
@@ -286,14 +446,93 @@ export function ApplicantsList() {
 
       {actionError && <p className="mb-3 text-sm text-red-600">{actionError}</p>}
 
+      <div className="mb-4 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4">
+        <label className="block">
+          <span className="mb-1 block text-[11px] font-medium uppercase tracking-wide text-slate-500">
+            Buscar
+          </span>
+          <input
+            type="search"
+            value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)}
+            placeholder="Nome, e-mail ou ID externo"
+            className="w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm text-slate-800 placeholder:text-slate-400 focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
+          />
+        </label>
+        <label className="block">
+          <span className="mb-1 block text-[11px] font-medium uppercase tracking-wide text-slate-500">
+            Status
+          </span>
+          <select
+            value={status}
+            onChange={(e) => applyStatus(e.target.value)}
+            className="w-full rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-800 focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
+          >
+            {STATUS_FILTERS.map((opt) => (
+              <option key={opt.id || "all"} value={opt.id}>
+                {opt.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="block">
+          <span className="mb-1 block text-[11px] font-medium uppercase tracking-wide text-slate-500">
+            Motivo
+          </span>
+          <select
+            value={pauseReason}
+            onChange={(e) => applyPauseReason(e.target.value)}
+            className="w-full rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-800 focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
+          >
+            {PAUSE_FILTERS.map((opt) => (
+              <option key={opt.id || "all"} value={opt.id}>
+                {opt.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="block">
+          <span className="mb-1 block text-[11px] font-medium uppercase tracking-wide text-slate-500">
+            Por página
+          </span>
+          <div className="flex items-center gap-2">
+            <select
+              value={pageSize}
+              onChange={(e) => applyPageSize(Number(e.target.value) as (typeof PAGE_SIZE_OPTIONS)[number])}
+              className="w-full rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-800 focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
+            >
+              {PAGE_SIZE_OPTIONS.map((size) => (
+                <option key={size} value={size}>
+                  {size}
+                </option>
+              ))}
+            </select>
+            {(q || status || pauseReason) && (
+              <button
+                type="button"
+                onClick={clearFilters}
+                className="shrink-0 text-xs font-medium text-slate-600 hover:underline"
+              >
+                Limpar
+              </button>
+            )}
+          </div>
+        </label>
+      </div>
+
       {loading && applicants.length === 0 && (
         <p className="text-sm text-slate-500">Carregando...</p>
       )}
       {!loading && applicants.length === 0 && (
-        <p className="text-sm text-slate-500">Nenhum motorista importado ainda.</p>
+        <p className="text-sm text-slate-500">
+          {q || status || pauseReason
+            ? "Nenhum motorista encontrado com esses filtros."
+            : "Nenhum motorista importado ainda."}
+        </p>
       )}
 
       {applicants.length > 0 && (
+        <div className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-slate-100 text-left text-xs uppercase text-slate-500">
@@ -302,14 +541,16 @@ export function ApplicantsList() {
                   type="checkbox"
                   checked={allBatchSelected}
                   onChange={toggleSelectAllBatch}
-                  title="Selecionar elegíveis para lote"
-                  aria-label="Selecionar elegíveis para lote"
+                  title="Selecionar elegíveis desta página"
+                  aria-label="Selecionar elegíveis desta página"
                 />
               </th>
               <th className="py-2">ID externo</th>
               <th className="py-2">Nome</th>
               <th className="py-2">Status</th>
+              <th className="py-2">Motivo</th>
               <th className="py-2">Etapa</th>
+              <th className="py-2">Cidade proxy</th>
               <th className="py-2" />
             </tr>
           </thead>
@@ -330,7 +571,12 @@ export function ApplicantsList() {
                   )}
                 </td>
                 <td className="py-2 text-slate-500">{applicant.externalId}</td>
-                <td className="py-2 text-slate-800">{applicant.fullName}</td>
+                <td className="py-2 text-slate-800">
+                  <div>{applicant.fullName}</div>
+                  {applicant.email && (
+                    <div className="text-xs font-normal text-slate-400">{applicant.email}</div>
+                  )}
+                </td>
                 <td className="py-2">
                   <span
                     className={`rounded-full px-2 py-1 text-xs font-medium ${
@@ -341,6 +587,11 @@ export function ApplicantsList() {
                   </span>
                 </td>
                 <td className="py-2 text-xs text-slate-600">
+                  {applicant.pauseReason ? pauseReasonLabel(applicant.pauseReason) : (
+                    <span className="text-slate-400">—</span>
+                  )}
+                </td>
+                <td className="py-2 text-xs text-slate-600">
                   {applicant.status === "IN_PROGRESS" || applicant.currentStep ? (
                     <span className={applicant.status === "IN_PROGRESS" ? "font-medium text-blue-700" : ""}>
                       {liveStepLabel(applicant.currentStep)}
@@ -348,6 +599,12 @@ export function ApplicantsList() {
                   ) : (
                     <span className="text-slate-400">—</span>
                   )}
+                </td>
+                <td
+                  className="py-2 text-xs text-slate-600"
+                  title={applicant.proxyExternalIp ?? undefined}
+                >
+                  {formatProxyGeoLabel(applicant.proxyGeoCity, applicant.proxyGeoRegion)}
                 </td>
                 <td className="py-2 text-right space-x-2 whitespace-nowrap">
                   {applicant.status === "IN_PROGRESS" && (
@@ -424,6 +681,36 @@ export function ApplicantsList() {
             ))}
           </tbody>
         </table>
+        </div>
+      )}
+
+      {total > 0 && (
+        <div className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 pt-3 text-xs text-slate-600">
+          <p>
+            Mostrando {rangeStart}–{rangeEnd} de {total}
+          </p>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              disabled={page <= 1 || loading}
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+              className="rounded-md border border-slate-300 px-2.5 py-1 font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-40"
+            >
+              Anterior
+            </button>
+            <span>
+              Página {page} de {totalPages}
+            </span>
+            <button
+              type="button"
+              disabled={page >= totalPages || loading}
+              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+              className="rounded-md border border-slate-300 px-2.5 py-1 font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-40"
+            >
+              Próxima
+            </button>
+          </div>
+        </div>
       )}
 
       {selected && (
@@ -442,6 +729,15 @@ export function ApplicantsList() {
           onClose={() => setBatchOpen(false)}
           onStarted={() => {
             setCheckedIds(new Set());
+            void load();
+          }}
+        />
+      )}
+
+      {generateOpen && (
+        <GenerateBatchModal
+          onClose={() => setGenerateOpen(false)}
+          onStarted={() => {
             void load();
           }}
         />

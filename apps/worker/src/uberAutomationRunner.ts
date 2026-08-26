@@ -8,7 +8,7 @@ import {
   BrowserProfileManager,
   type BrowserProfile,
 } from "@uber-automation/automation";
-import { db, auditLogs } from "@uber-automation/database";
+import { db, auditLogs, proxyConfigs } from "@uber-automation/database";
 import { and, eq } from "drizzle-orm";
 import {
   UberDriverApplicationAdapter,
@@ -21,12 +21,19 @@ import {
 } from "@uber-automation/platform-adapters";
 import { env } from "./env";
 import { resolveProxyConnection } from "./proxyConnection";
+import {
+  applicantNeedsProxyGeo,
+  formatProxyGeoLabel,
+  lookupProxyGeoViaPage,
+  saveApplicantProxyGeo,
+} from "./proxyGeoLookup";
 import { NonRetryableAutomationError, TechnicalAutomationError, AutomationStoppedError, type TechnicalReason } from "./errors";
 import type { AutomationJobLike } from "./processor";
 import { pickSignupMobileFingerprint, mobilePlatformOf, type BrowserFingerprint } from "./browserFingerprint";
 import { loadUberStorageState, persistUberStorageState } from "./sessionRestore";
 import { createPlaceholderPhoneAllocator } from "./placeholderPhonePool";
 import { allocateNextEarnCity } from "./earnCityPool";
+import { loadCompanySettingsForWorker } from "./companySettings";
 import {
   automationStopAllKey,
   automationStopKey,
@@ -116,7 +123,7 @@ async function rotateBrowserProfile(
 }
 
 /** Já gravou ACCOUNT_CREATED no audit — não apagar cookies / não refazer signup. */
-async function applicantHasUberAccountCreated(applicantId: string): Promise<boolean> {
+export async function applicantHasUberAccountCreated(applicantId: string): Promise<boolean> {
   const [row] = await db
     .select({ id: auditLogs.id })
     .from(auditLogs)
@@ -174,17 +181,67 @@ function isEmailCodeRetry(result: AutomationResult): boolean {
   return result.status === "ERROR" && result.error?.code === "EMAIL_CODE_RETRY";
 }
 
+const SLOW_PROXY_CODES = new Set([
+  "TIMEOUT",
+  "CONNECTION_FAILURE",
+  "PAGE_UNAVAILABLE",
+  "PROXY_UNAVAILABLE",
+  "LOAD_ERROR",
+  "ELEMENT_TIMEOUT",
+]);
+
+/** goto/timeout/rede — proxy lento, não precisa esperar retry Bull no mesmo IP. */
+function isSlowProxyFailure(result: AutomationResult): boolean {
+  if (result.status !== "ERROR") return false;
+  const code = result.error?.code ?? "";
+  if (SLOW_PROXY_CODES.has(code)) return true;
+  const msg = result.error?.message ?? "";
+  return /Timeout \d+ms exceeded|ERR_TIMED_OUT|ERR_PROXY|ERR_CONNECTION|ERR_TUNNEL|ERR_SOCKS|net::ERR/i.test(
+    msg,
+  );
+}
+
 function isRotatableSessionFailure(result: AutomationResult): boolean {
-  // PHONE_PROBLEM / SMS NÃO rotacionam: 2 números ruins → FAILED e próximo da fila.
-  return isCaptchaPause(result) || isLoadError(result) || isEmailCodeRetry(result);
+  // SMS (PHONE_SMS_RETRY) NÃO rotaciona fingerprint: só troca números no retry Bull.
+  return (
+    isCaptchaPause(result) ||
+    isLoadError(result) ||
+    isEmailCodeRetry(result) ||
+    isSlowProxyFailure(result)
+  );
 }
 
 function rotationReason(
   result: AutomationResult,
-): "CAPTCHA" | "LOAD_ERROR" | "EMAIL_CODE_RETRY" {
+): "CAPTCHA" | "LOAD_ERROR" | "EMAIL_CODE_RETRY" | "PROXY_SLOW" {
   if (isEmailCodeRetry(result)) return "EMAIL_CODE_RETRY";
+  if (isSlowProxyFailure(result)) return "PROXY_SLOW";
   if (isLoadError(result)) return "LOAD_ERROR";
   return "CAPTCHA";
+}
+
+async function listActiveProxyIds(companyId: string): Promise<string[]> {
+  const rows = await db
+    .select({ id: proxyConfigs.id })
+    .from(proxyConfigs)
+    .where(and(eq(proxyConfigs.companyId, companyId), eq(proxyConfigs.status, "ACTIVE")))
+    .orderBy(proxyConfigs.port, proxyConfigs.id);
+  return rows.map((row) => row.id);
+}
+
+function nextActiveProxyId(ids: string[], currentId: string): string | null {
+  if (ids.length < 2) return null;
+  const index = ids.indexOf(currentId);
+  return ids[(index < 0 ? 0 : index + 1) % ids.length] ?? null;
+}
+
+async function persistJobProxyId(job: AutomationJobLike, proxyId: string): Promise<void> {
+  job.data.proxyId = proxyId;
+  const updater = (job as AutomationJobLike & { updateData?: (data: typeof job.data) => Promise<void> })
+    .updateData;
+  if (typeof updater === "function") {
+    await updater.call(job, { ...job.data, proxyId }).catch(() => undefined);
+  }
 }
 
 /**
@@ -199,10 +256,9 @@ function rotationReason(
  *   ignorado nesse modo (o adaptador gera a própria senha a partir do
  *   sobrenome do motorista; não há login numa conta pré-existente).
  *
-/**
- * Em CAPTCHA / LOAD_ERROR / EMAIL_CODE_RETRY: limpa perfil e avança
- * fingerprint. SMS esgotado (2 números) vira PHONE_PROBLEM (não rotaciona).
- * Índice persiste entre retries BullMQ para não repetir o FP 0.
+ * Em CAPTCHA / LOAD_ERROR / EMAIL_CODE_RETRY / proxy lento (TIMEOUT):
+ * limpa perfil e avança fingerprint. Timeout/rede troca para o próximo
+ * proxy ACTIVE (conta ainda não criada). SMS esgotado vira PHONE_SMS_RETRY.
  */
 export function createUberAutomationRunner(
   options: UberAutomationRunnerOptions,
@@ -224,9 +280,9 @@ export function createUberAutomationRunner(
       companyId: data.companyId,
       storageRoot: browserProfilesRoot(),
     });
-    const proxyConnection = await resolveProxyConnection(data.proxyId).catch(() => null);
+    let proxyConnection = await resolveProxyConnection(data.proxyId).catch(() => null);
     const isProduction = env.AUTOMATION_TARGET === "production";
-    const uberAccountCreated = await applicantHasUberAccountCreated(data.applicantId);
+    let accountCreatedFlag = await applicantHasUberAccountCreated(data.applicantId);
     const uberEarnSetupComplete = await applicantHasUberEarnSetup(data.applicantId);
 
     let profile = await hydrateProfile(
@@ -236,7 +292,16 @@ export function createUberAutomationRunner(
       data.proxyId,
     );
 
-    const phoneAllocator = createPlaceholderPhoneAllocator(data.applicantId);
+    const phoneAllocator = createPlaceholderPhoneAllocator(data.applicantId, {
+      resolvePhoneBase: async () => {
+        const settings = await loadCompanySettingsForWorker(data.companyId);
+        return settings.placeholderPhoneBase;
+      },
+    });
+    const resolveEarnCity = async () => {
+      const settings = await loadCompanySettingsForWorker(data.companyId);
+      return settings.earnCity;
+    };
     const rotationRedis = new IORedis(env.REDIS_URL, { maxRetriesPerRequest: null });
     let fingerprintIndex = await getFingerprintIndex(rotationRedis, data.applicantId).catch(
       () => 0,
@@ -258,21 +323,51 @@ export function createUberAutomationRunner(
           emailVerificationWorker,
           auditLogger: options.auditLogger,
           phoneAttemptOffset: attempt * PHONE_ATTEMPTS_PER_SESSION,
-          uberAccountCreated,
+          uberAccountCreated: accountCreatedFlag,
           uberEarnSetupComplete,
           phoneAllocator,
+          resolveEarnCity,
+          // Lookup geo do IP até gravar (retry após CAPTCHA/rotação).
+          shouldLookupProxyGeo:
+            attempt === 0 || (await applicantNeedsProxyGeo(data.applicantId).catch(() => true)),
         });
 
+        // Conta pode ser criada no meio da tentativa — reconsulta antes de rotacionar.
+        accountCreatedFlag =
+          accountCreatedFlag || (await applicantHasUberAccountCreated(data.applicantId));
+
         // Conta já criada: nunca rotaciona/limpa cookies (perderia o hub).
-        if (uberAccountCreated || !isRotatableSessionFailure(result)) {
+        if (accountCreatedFlag || !isRotatableSessionFailure(result)) {
           handleResult(result, result._screenshotPath);
           return;
         }
 
         const screenshotPath = result._screenshotPath;
         const reason = rotationReason(result);
+        const previousProxyId = data.proxyId;
 
-        // Sempre avança fingerprint (OTP não chegou / captcha / load error / SMS).
+        if (reason === "PROXY_SLOW") {
+          const activeIds = await listActiveProxyIds(data.companyId);
+          const nextProxyId = nextActiveProxyId(activeIds, data.proxyId);
+          if (nextProxyId) {
+            await persistJobProxyId(job, nextProxyId);
+            proxyConnection = await resolveProxyConnection(nextProxyId).catch(() => null);
+            await options.auditLogger.log({
+              companyId: data.companyId,
+              applicantId: data.applicantId,
+              action: "proxy_rotated_slow",
+              metadata: {
+                previousProxyId,
+                nextProxyId,
+                attempt: attempt + 1,
+                errorCode: result.error?.code,
+                screenshotPath,
+              },
+            });
+          }
+        }
+
+        // Sempre avança fingerprint (OTP não chegou / captcha / load error / proxy lento).
         const nextIndex = await advanceFingerprintIndex(rotationRedis, data.applicantId).catch(
           () => fingerprintIndex + 1,
         );
@@ -287,6 +382,8 @@ export function createUberAutomationRunner(
           action: "browser_session_rotated",
           metadata: {
             reason,
+            previousProxyId,
+            proxyId: data.proxyId,
             attempt: attempt + 1,
             maxRotations: MAX_SESSION_ROTATIONS,
             phoneAttemptOffset: (attempt + 1) * PHONE_ATTEMPTS_PER_SESSION,
@@ -318,11 +415,13 @@ export function createUberAutomationRunner(
           return;
         }
 
-        // CAPTCHA: cooldown maior antes de nova tentativa (menos ban/rate-limit).
+        // CAPTCHA: cooldown maior. Proxy lento: troca rápido e segue.
         const cooldownMs =
           reason === "CAPTCHA"
             ? 8_000 + attempt * 3_500
-            : 2_500 + attempt * 1_500;
+            : reason === "PROXY_SLOW"
+              ? 800 + attempt * 400
+              : 2_500 + attempt * 1_500;
         await new Promise((resolve) => setTimeout(resolve, cooldownMs));
       }
     } finally {
@@ -345,6 +444,8 @@ async function runSingleBrowserAttempt(args: {
   uberAccountCreated: boolean;
   uberEarnSetupComplete: boolean;
   phoneAllocator: ReturnType<typeof createPlaceholderPhoneAllocator>;
+  resolveEarnCity: () => Promise<string>;
+  shouldLookupProxyGeo?: boolean;
 }): Promise<AttemptResult> {
   const {
     data,
@@ -358,6 +459,8 @@ async function runSingleBrowserAttempt(args: {
     uberAccountCreated,
     uberEarnSetupComplete,
     phoneAllocator,
+    resolveEarnCity,
+    shouldLookupProxyGeo = false,
   } = args;
 
   const session = await launchAutomationBrowserSession({
@@ -472,6 +575,41 @@ async function runSingleBrowserAttempt(args: {
       session.engine === "electron" && context.pages().length > 0
         ? context.pages()[0]!
         : await context.newPage();
+
+    // Cidade real do IP de saída do proxy via IP2Location no browser (com proxy).
+    // Usa a página principal — newPage() no Electron/CDP é instável.
+    if (shouldLookupProxyGeo && isProduction && proxyConnection) {
+      const geo = await lookupProxyGeoViaPage(page).catch(() => null);
+      if (geo && (geo.city || geo.region || geo.externalIp)) {
+        await saveApplicantProxyGeo(data.applicantId, geo).catch(() => undefined);
+        await auditLogger
+          .log({
+            companyId: data.companyId,
+            applicantId: data.applicantId,
+            action: "proxy_geo_looked_up",
+            metadata: {
+              externalIp: geo.externalIp,
+              city: geo.city,
+              region: geo.region,
+              country: geo.country ?? null,
+              label: formatProxyGeoLabel(geo.city, geo.region),
+              proxyId: data.proxyId,
+              source: geo.source,
+            },
+          })
+          .catch(() => undefined);
+      } else {
+        await auditLogger
+          .log({
+            companyId: data.companyId,
+            applicantId: data.applicantId,
+            action: "proxy_geo_lookup_failed",
+            metadata: { proxyId: data.proxyId, via: "ip2location_demo_page" },
+          })
+          .catch(() => undefined);
+      }
+    }
+
     // Pausa curta antes do fluxo — reduz padrão goto→submit instantâneo.
     await page.waitForTimeout(humanPauseMs(600, 1_400));
 
@@ -562,7 +700,7 @@ async function runSingleBrowserAttempt(args: {
             });
           },
           allocateEarnCity: async () => {
-            const city = await allocateNextEarnCity(data.applicantId);
+            const city = await allocateNextEarnCity(data.applicantId, await resolveEarnCity());
             await auditLogger.log({
               companyId: data.companyId,
               applicantId: data.applicantId,
@@ -660,14 +798,6 @@ function handleResult(result: AutomationResult, screenshotPath?: string): void {
   if (result.status === "SUCCESS") return;
 
   const screenshotSuffix = screenshotPath ? ` [screenshot: ${screenshotPath}]` : "";
-
-  // Legado PHONE_SMS_RETRY → mesmo tratamento de PHONE_PROBLEM (não retenta em loop).
-  if (result.status === "ERROR" && result.error?.code === "PHONE_SMS_RETRY") {
-    throw new NonRetryableAutomationError(
-      "PHONE_PROBLEM",
-      (result.error.message ?? "Problema celular") + screenshotSuffix,
-    );
-  }
 
   if (result.status === "PAUSED" || result.status === "VERIFICATION_DETECTED") {
     const v = result.verificationDetected;

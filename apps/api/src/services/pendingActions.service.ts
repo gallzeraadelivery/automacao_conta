@@ -16,6 +16,10 @@ export interface PendingActionView {
   email: string;
   phone: string | null;
   city: string | null;
+  /** Cidade/região real do IP do proxy (lookup). */
+  proxyGeoCity: string | null;
+  proxyGeoRegion: string | null;
+  proxyExternalIp: string | null;
   vehicleType: string | null;
   status: string;
   currentStep: string | null;
@@ -41,6 +45,9 @@ function toPendingActionView(
     email: applicant.email,
     phone: applicant.phone,
     city: applicant.city,
+    proxyGeoCity: applicant.proxyGeoCity ?? null,
+    proxyGeoRegion: applicant.proxyGeoRegion ?? null,
+    proxyExternalIp: applicant.proxyExternalIp ?? null,
     vehicleType: applicant.vehicleType,
     status: applicant.status,
     currentStep: applicant.currentStep,

@@ -87,6 +87,28 @@ describe("extractVerificationCode", () => {
     expect(result!.code).toBe("482913");
   });
 
+  it("extracts Uber Welcome OTP when subject is Welcome to Uber and body has Verification code", () => {
+    const result = extractVerificationCode(
+      [
+        message({
+          id: "welcome-otp",
+          from: "admin@uber.com",
+          subject: "Welcome to Uber",
+          bodyText: "Verification code: 8606 Enter this code on the signup page to continue.",
+          snippet: "",
+          toAddresses: ["miguelfernandes170119@mailsproton.com"],
+        }),
+      ],
+      {
+        requestedAt: REQUESTED_AT,
+        expectedSender: "uber.com",
+        expectedRecipient: "miguelfernandes170119@mailsproton.com",
+      },
+    );
+    expect(result).not.toBeNull();
+    expect(result!.code).toBe("8606");
+  });
+
   it("when scores tie, prefers the newer message (not a stale OTP)", () => {
     const older = message({
       id: "older",
@@ -186,5 +208,71 @@ describe("extractVerificationCode", () => {
 
     expect(result!.messageId).toBe("target");
     expect(result!.code).toBe("222222");
+  });
+
+  it("ignores Uber OTP that does not target expectedRecipient (catch-all flood)", () => {
+    const wrongAlias = message({
+      id: "wrong",
+      snippet: "Seu código de verificação é 333333",
+      bodyText: "Enter the 4-digit code sent to you at: otheruser@mailsproton.com — 333333",
+      receivedAt: new Date("2026-01-01T12:05:00Z"),
+    });
+    const result = extractVerificationCode([wrongAlias], {
+      requestedAt: REQUESTED_AT,
+      expectedSender: "noreply@uber.com",
+      expectedRecipient: "nataliaibarra130845@mailsproton.com",
+    });
+    expect(result).toBeNull();
+  });
+
+  it("matches expectedRecipient via To/Delivered-To headers when body omits alias", () => {
+    const headerOnly = message({
+      id: "header-target",
+      snippet: "Seu código de verificação é 444444",
+      bodyText: "Your verification code is 444444",
+      toAddresses: ["nataliaibarra130845@mailsproton.com"],
+      receivedAt: new Date("2026-01-01T12:03:00Z"),
+    });
+    const result = extractVerificationCode([headerOnly], {
+      requestedAt: REQUESTED_AT,
+      expectedSender: "noreply@uber.com",
+      expectedRecipient: "nataliaibarra130845@mailsproton.com",
+    });
+    expect(result!.code).toBe("444444");
+  });
+
+  it("ignores non-Uber senders even when subject mentions verification", () => {
+    const promo = message({
+      id: "promo",
+      from: "newsletter@other-service.com",
+      subject: "Confirm your subscription today",
+      snippet: "Your verification code is 555555",
+      bodyText: "Click to confirm. code 555555",
+      receivedAt: new Date("2026-01-01T12:03:00Z"),
+    });
+    const result = extractVerificationCode([promo], {
+      requestedAt: REQUESTED_AT,
+      expectedSender: "noreply@uber.com",
+      expectedRecipient: "andresilva130845@mailsproton.com",
+    });
+    expect(result).toBeNull();
+  });
+
+  it("ignores Uber marketing with bare numbers in catch-all (no code keyword)", () => {
+    const marketing = message({
+      id: "marketing",
+      from: "noreply@uber.com",
+      subject: "Welcome to Uber",
+      snippet: "Earn up to 2500 this week. Call 1800-123-4567.",
+      bodyText: "Welcome! Your driver id is 12345678.",
+      toAddresses: ["andresilva130845@mailsproton.com"],
+      receivedAt: new Date("2026-01-01T12:03:00Z"),
+    });
+    const result = extractVerificationCode([marketing], {
+      requestedAt: REQUESTED_AT,
+      expectedSender: "noreply@uber.com",
+      expectedRecipient: "andresilva130845@mailsproton.com",
+    });
+    expect(result).toBeNull();
   });
 });

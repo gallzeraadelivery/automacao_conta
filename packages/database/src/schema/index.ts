@@ -6,3 +6,5 @@ export * from "./proxyConfigs";
 export * from "./browserProfiles";
 export * from "./auditLogs";
 export * from "./driverDeliveries";
+export * from "./companySettings";
+export * from "./usedEmails";

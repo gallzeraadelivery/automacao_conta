@@ -87,6 +87,8 @@ export interface GmailMessage {
   subject: string;
   snippet: string;
   bodyText?: string;
+  /** Destinatários (To/Delivered-To/envelope) — essencial em catch-all. */
+  toAddresses?: string[];
   receivedAt: Date;
 }
 

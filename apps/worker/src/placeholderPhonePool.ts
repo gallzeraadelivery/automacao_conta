@@ -39,11 +39,19 @@ async function writePool(pool: PoolFile): Promise<void> {
   await writeFile(file, JSON.stringify(pool, null, 2), "utf8");
 }
 
+export interface PlaceholderPhoneAllocatorOptions {
+  /** Resolvido a cada allocate (company_settings / env). */
+  resolvePhoneBase?: () => Promise<string>;
+}
+
 /**
  * Alocador de placeholders por job: pula números já usados (hub **ou**
  * SMS rejeitado) e os já tentados nesta execução.
  */
-export function createPlaceholderPhoneAllocator(applicantId: string): {
+export function createPlaceholderPhoneAllocator(
+  applicantId: string,
+  options: PlaceholderPhoneAllocatorOptions = {},
+): {
   allocateNext(): Promise<string>;
   markUsed(phone: string, reason?: string): Promise<void>;
 } {
@@ -53,7 +61,10 @@ export function createPlaceholderPhoneAllocator(applicantId: string): {
     async allocateNext(): Promise<string> {
       const pool = await readPool();
       const blocked = new Set([...Object.keys(pool.used), ...reservedThisRun]);
-      const digits = nextFreePlaceholderPhoneDigits(blocked);
+      const baseOverride = options.resolvePhoneBase
+        ? await options.resolvePhoneBase()
+        : undefined;
+      const digits = nextFreePlaceholderPhoneDigits(blocked, 10_000, baseOverride);
       reservedThisRun.add(digits);
       return formatUsPhoneFromDigits(digits);
     },
@@ -62,7 +73,6 @@ export function createPlaceholderPhoneAllocator(applicantId: string): {
       const digits = toPhoneDigits(phone);
       if (digits.length !== 10) return;
       const pool = await readPool();
-      // SMS rejeitado / hub: sempre registra (atualiza reason se já existia).
       pool.used[digits] = {
         applicantId,
         usedAt: new Date().toISOString(),

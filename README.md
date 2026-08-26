@@ -11,6 +11,22 @@ Este repositório nunca deve conter lógica que crie identidades falsas, envie
 documentos/selfies, acesse câmera, resolva CAPTCHA/2FA, troque o provedor de verificação
 escolhido pela plataforma, ou cancele/recrie cadastros automaticamente.
 
+## Instalação rápida (janela nativa, Mac/Windows)
+
+O painel abre em **janela própria** (não no navegador). Guia completo:
+
+→ **[INSTALACAO.md](./INSTALACAO.md)**
+
+```bash
+# Mac
+./scripts/install-mac.sh
+# depois: clique em Iniciar-Mac.command  (ou ./scripts/start-mac.sh)
+
+# Windows (PowerShell)
+.\scripts\install-windows.ps1
+# depois: clique em Iniciar-Windows.bat  (ou .\scripts\start-windows.ps1)
+```
+
 ## Fase 1 — o que já existe
 
 - Monorepo pnpm (`apps/*`, `packages/*`)

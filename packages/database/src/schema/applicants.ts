@@ -58,6 +58,14 @@ export const applicants = pgTable(
     state: varchar("state", { length: 2 }),
     postalCode: varchar("postal_code", { length: 20 }),
     vehicleType: varchar("vehicle_type", { length: 50 }),
+    /**
+     * Geo real do IP de saída do proxy (lookup na hora do job — não
+     * `proxy_configs.declared_region`). Cidade Earn (Orlando) é outra coisa.
+     */
+    proxyExternalIp: varchar("proxy_external_ip", { length: 45 }),
+    proxyGeoCity: varchar("proxy_geo_city", { length: 100 }),
+    proxyGeoRegion: varchar("proxy_geo_region", { length: 100 }),
+    proxyGeoLookedUpAt: timestamp("proxy_geo_looked_up_at"),
     consentAt: timestamp("consent_at"),
     status: varchar("status", { length: 50 }).notNull().default("NEW"),
     currentStep: varchar("current_step", { length: 100 }),
@@ -70,6 +78,8 @@ export const applicants = pgTable(
     // ocorreu. O detalhe legível fica no log de auditoria correspondente.
     pauseReason: varchar("pause_reason", { length: 50 }),
     pausedAt: timestamp("paused_at"),
+    /** Quando o operador baixou os cookies AdsPower (relatório Socure). */
+    cookiesDownloadedAt: timestamp("cookies_downloaded_at"),
     assignedOperatorId: uuid("assigned_operator_id").references(() => operators.id),
     resolvedByOperatorId: uuid("resolved_by_operator_id").references(() => operators.id),
     resolvedAt: timestamp("resolved_at"),

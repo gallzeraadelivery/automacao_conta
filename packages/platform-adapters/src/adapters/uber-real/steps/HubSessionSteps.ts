@@ -26,12 +26,27 @@ export async function looksLikeAuthGate(page: Page): Promise<boolean> {
   return coldLogin.first().isVisible({ timeout: 1_500 }).catch(() => false);
 }
 
+/**
+ * Tela de cidade do onboarding. Variante clássica: "Earn with Uber" /
+ * "Where would you like to earn?". Variante bonjour: "Choose your city"
+ * + "Select city" + referral code (caso Andre Silva).
+ */
+export function earnCityUi(page: Page) {
+  return page
+    .getByRole("heading", { name: /earn with uber|choose your city/i })
+    .or(page.getByText(/where would you like to earn/i))
+    .or(page.getByText(/^select city$/i))
+    .or(page.getByText(/referral code \(optional\)/i));
+}
+
 export async function looksLikeOnboardingScreens(page: Page): Promise<boolean> {
   const ui = page
     .getByRole("heading", {
-      name: /gender|g[eê]nero|earn with uber|what'?s your gender|all set|choose how you want to earn/i,
+      name: /gender|g[eê]nero|earn with uber|choose your city|what'?s your gender|all set|choose how you want to earn/i,
     })
     .or(page.getByText(/where would you like to earn/i))
+    .or(page.getByText(/^select city$/i))
+    .or(page.getByText(/referral code \(optional\)/i))
     .or(page.getByText(/^delivery with car$/i));
   return ui.first().isVisible({ timeout: 2_500 }).catch(() => false);
 }
@@ -49,6 +64,15 @@ export async function looksLikeUberHub(page: Page): Promise<boolean> {
     .or(page.getByText(/add my vehicle|go online|you're offline|earnings/i));
 
   return hubUi.first().isVisible({ timeout: 2_500 }).catch(() => false);
+}
+
+/** Chrome do bonjour já montou (abas Documents / My Profile) mesmo com body em spinner. */
+export async function looksLikeBonjourChrome(page: Page): Promise<boolean> {
+  const chrome = page
+    .getByRole("tab", { name: /^(documents|my profile)$/i })
+    .or(page.getByText(/^documents$/i))
+    .or(page.getByRole("button", { name: /^sign out$/i }));
+  return chrome.first().isVisible({ timeout: 1_500 }).catch(() => false);
 }
 
 async function waitOutWhiteSpinner(page: Page, maxMs: number): Promise<void> {
@@ -163,7 +187,34 @@ export async function softGoto(
     await page.goto(url, { timeout: timeoutMs, waitUntil: "domcontentloaded" });
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
-    if (!/ERR_ABORTED|interrupted|Navigation cancelled/i.test(msg)) {
+    if (/ERR_ABORTED|interrupted|Navigation cancelled/i.test(msg)) {
+      // redirect chain da Uber — segue
+    } else if (/Timeout|ERR_TIMED_OUT|ERR_CONNECTION|ERR_PROXY|NS_ERROR_NET/i.test(msg)) {
+      // SPA / proxy lento: chrome útil às vezes sobe sem domcontentloaded.
+      const onMarketingRide =
+        /uber\.com/i.test(page.url()) &&
+        !/drivers\.uber\.com|bonjour\.uber\.com|auth\.uber\.com/i.test(page.url()) &&
+        (await page
+          .getByRole("link", { name: /^earn$/i })
+          .or(page.getByRole("button", { name: /^earn$/i }))
+          .or(
+            page.getByText(
+              /get ready for your first trip|see prices|book your trip|earn with uber|where would you like to earn|complete next steps|welcome back|deliver with a car/i,
+            ),
+          )
+          .first()
+          .isVisible({ timeout: 1_500 })
+          .catch(() => false));
+      const usable =
+        (await looksLikeBonjourChrome(page)) ||
+        (await looksLikeUberHub(page)) ||
+        (await looksLikeOnboardingScreens(page)) ||
+        (await looksLikeAuthGate(page)) ||
+        onMarketingRide;
+      // Timeout de rede no destino: se a URL atual ainda for utilizável, segue;
+      // senão propaga (não fingir sucesso em about:blank).
+      if (!usable) throw error;
+    } else {
       throw error;
     }
   }
@@ -233,8 +284,8 @@ export async function ensureHubAfterAccountCreated(ctx: RealStepContext): Promis
   }
 
   const genderOrEarn = page
-    .getByRole("heading", { name: /gender|g[eê]nero|earn with uber|what'?s your gender/i })
-    .or(page.getByText(/where would you like to earn/i));
+    .getByRole("heading", { name: /gender|g[eê]nero|earn with uber|choose your city|what'?s your gender/i })
+    .or(page.getByText(/where would you like to earn|select city|referral code \(optional\)/i));
   if (await genderOrEarn.first().isVisible({ timeout: 2_000 }).catch(() => false)) {
     return;
   }

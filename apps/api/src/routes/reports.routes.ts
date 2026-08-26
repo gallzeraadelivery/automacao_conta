@@ -1,13 +1,16 @@
 import { Router } from "express";
 import { z } from "zod";
-import { authenticate } from "../middleware/auth";
+import { authenticate, requireRole } from "../middleware/auth";
 import {
   buildAutomationReport,
   buildAuditReport,
+  buildSocureProxyGeoReport,
   listVerificationReport,
   type ReportPeriod,
   type VerificationProviderFilter,
 } from "../services/reports.service";
+import { exportUberCookiesZip } from "../services/applicants.service";
+import { logAudit } from "../services/auditLog.service";
 import { toCsv } from "../lib/csv";
 import { renderReportPdf } from "../lib/pdf";
 
@@ -79,6 +82,60 @@ reportsRouter.get("/verification", async (req, res, next) => {
   }
 });
 
+/**
+ * ZIP com cookies AdsPower dos motoristas selecionados (relatório Socure).
+ * Marca como baixados os que entraram no arquivo.
+ */
+reportsRouter.post(
+  "/verification/cookies-zip",
+  requireRole("admin", "operator"),
+  async (req, res, next) => {
+    try {
+      const body = z
+        .object({
+          applicantIds: z.array(z.string().uuid()).min(1),
+        })
+        .parse(req.body);
+      const result = await exportUberCookiesZip(req.user!.companyId, body.applicantIds);
+
+      await logAudit({
+        companyId: req.user!.companyId,
+        operatorId: req.user!.operatorId,
+        action: "download_uber_cookies_zip",
+        metadata: {
+          included: result.included.length,
+          skipped: result.skipped.length,
+          applicantIds: result.included.map((r) => r.id),
+        },
+      });
+
+      const stamp = new Date().toISOString().slice(0, 10);
+      res.setHeader("Content-Type", "application/zip");
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="socure-cookies-${stamp}.zip"`,
+      );
+      res.setHeader("X-Cookies-Included", String(result.included.length));
+      res.setHeader("X-Cookies-Skipped", String(result.skipped.length));
+      return res.status(200).send(result.zip);
+    } catch (error) {
+      return next(error);
+    }
+  },
+);
+
+/**
+ * BI Socure × cidade do proxy: ranking de Socure (provider) e Veriff (pause).
+ */
+reportsRouter.get("/socure-proxy-geo", async (req, res, next) => {
+  try {
+    const report = await buildSocureProxyGeoReport(req.user!.companyId);
+    return res.json({ success: true, data: report });
+  } catch (error) {
+    return next(error);
+  }
+});
+
 const exportQuerySchema = periodQuerySchema.extend({
   format: z.enum(["csv", "pdf"]).default("csv"),
 });
@@ -90,7 +147,7 @@ reportsRouter.get("/automation/export", async (req, res, next) => {
     const report = await buildAutomationReport(req.user!.companyId, period);
 
     if (format === "csv") {
-      const csv = toCsv(
+      const summaryCsv = toCsv(
         [
           { metric: "totalProcessed", value: report.totalProcessed },
           { metric: "successfulCount", value: report.successfulCount },
@@ -108,6 +165,18 @@ reportsRouter.get("/automation/export", async (req, res, next) => {
         ],
         ["metric", "value"],
       );
+      const geoCsv = toCsv(
+        report.proxyGeoRows.map((row) => ({
+          externalId: row.externalId,
+          fullName: row.fullName,
+          status: row.status,
+          proxyExternalIp: row.proxyExternalIp ?? "",
+          proxyGeoCity: row.proxyGeoCity ?? "",
+          proxyGeoRegion: row.proxyGeoRegion ?? "",
+        })),
+        ["externalId", "fullName", "status", "proxyExternalIp", "proxyGeoCity", "proxyGeoRegion"],
+      );
+      const csv = `${summaryCsv}\n\n# proxy_geo\n${geoCsv}`;
       res.setHeader("Content-Type", "text/csv; charset=utf-8");
       res.setHeader("Content-Disposition", 'attachment; filename="automation-report.csv"');
       return res.send(csv);
@@ -145,6 +214,17 @@ reportsRouter.get("/automation/export", async (req, res, next) => {
           heading: "Principais erros",
           headers: ["Código", "Ocorrências", "Mensagem"],
           rows: report.topErrors.map((error) => [error.code, String(error.count), error.message]),
+        },
+        {
+          heading: "Cidade do proxy (IP)",
+          headers: ["Motorista", "Status", "IP", "Cidade", "Região"],
+          rows: report.proxyGeoRows.map((row) => [
+            row.fullName,
+            row.status,
+            row.proxyExternalIp ?? "-",
+            row.proxyGeoCity ?? "-",
+            row.proxyGeoRegion ?? "-",
+          ]),
         },
       ],
     });

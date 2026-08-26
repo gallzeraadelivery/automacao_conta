@@ -99,12 +99,15 @@ services:
       # direto em ./storage/automation-screenshots na sua máquina, sem
       # precisar de `docker cp`.
       AUTOMATION_SCREENSHOTS_PATH: /app/storage/automation-screenshots
+      # Blacklist de placeholders (hub + SMS) — bind mount para não zerar no rebuild.
+      UBER_PLACEHOLDER_PHONE_POOL_PATH: /app/apps/worker/storage/placeholder-phones-used.json
     ports:
       # noVNC: abra http://localhost:6080/vnc.html para ver o Electron headed
       - "6080:6080"
     volumes:
       - browser_profiles_data:/app/storage/browser-profiles
       - ../../storage/automation-screenshots:/app/storage/automation-screenshots
+      - ../../apps/worker/storage:/app/apps/worker/storage
     depends_on:
       postgres:
         condition: service_healthy

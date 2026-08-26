@@ -4,11 +4,14 @@ import { fileURLToPath } from "node:url";
 
 const MONOREPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 
-/** Cidade fixa na tela Earn with Uber (todas as contas). */
-export const EARN_CITY_FIXED = "Orlando, FL" as const;
+/** Fallback se company_settings / env não tiverem cidade. */
+export const DEFAULT_EARN_CITY = "Orlando, FL" as const;
 
-/** Mantido só por compat / logs — sempre Orlando. */
-export const EARN_CITY_POOL = [EARN_CITY_FIXED] as const;
+/** @deprecated use DEFAULT_EARN_CITY — mantido por testes/compat. */
+export const EARN_CITY_FIXED = DEFAULT_EARN_CITY;
+
+/** Mantido só por compat / logs. */
+export const EARN_CITY_POOL = [DEFAULT_EARN_CITY] as const;
 
 function poolFilePath(): string {
   const configured = process.env.UBER_EARN_CITY_POOL_PATH;
@@ -18,10 +21,16 @@ function poolFilePath(): string {
 }
 
 /**
- * Sempre Orlando, FL. Grava lastAssigned só pra auditoria local.
+ * Aloca a cidade Earn. `cityOverride` vem de company_settings (painel);
+ * senão usa env / Orlando.
  */
-export async function allocateNextEarnCity(applicantId: string): Promise<string> {
-  const city = EARN_CITY_FIXED;
+export async function allocateNextEarnCity(
+  applicantId: string,
+  cityOverride?: string,
+): Promise<string> {
+  const city =
+    (cityOverride?.trim() || process.env.UBER_EARN_CITY?.trim() || DEFAULT_EARN_CITY).trim() ||
+    DEFAULT_EARN_CITY;
   try {
     const file = poolFilePath();
     await mkdir(path.dirname(file), { recursive: true });
@@ -42,7 +51,7 @@ export async function allocateNextEarnCity(applicantId: string): Promise<string>
       "utf8",
     );
   } catch {
-    // best-effort — a cidade fixa não depende do arquivo
+    // best-effort — a cidade não depende do arquivo
   }
   return city;
 }

@@ -13,6 +13,7 @@ import { dashboardRouter } from "./routes/dashboard.routes";
 import { pendingActionsRouter } from "./routes/pendingActions.routes";
 import { deliveriesRouter } from "./routes/deliveries.routes";
 import { reportsRouter } from "./routes/reports.routes";
+import { settingsRouter } from "./routes/settings.routes";
 import { errorHandler, notFoundHandler } from "./middleware/errorHandler";
 
 export function createApp(): Express {
@@ -43,6 +44,7 @@ export function createApp(): Express {
   app.use("/api/pending-actions", pendingActionsRouter);
   app.use("/api/deliveries", deliveriesRouter);
   app.use("/api/reports", reportsRouter);
+  app.use("/api/settings", settingsRouter);
 
   app.use(notFoundHandler);
   app.use(errorHandler);

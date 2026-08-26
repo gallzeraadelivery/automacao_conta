@@ -5,3 +5,4 @@ export * from "./validation/emailAccountImport";
 export * from "./validation/emailListImport";
 export * from "./validation/auth";
 export * from "./validation/proxy";
+export * from "./validation/companySettings";

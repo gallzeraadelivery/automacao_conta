@@ -17,6 +17,7 @@ import { apiRequest } from "@/lib/apiClient";
 import { StatCard } from "@/components/StatCard";
 import { ReportExportBar } from "@/components/ReportExportBar";
 import { formatDuration, type AutomationReport } from "@/lib/reports";
+import { formatProxyGeoLabel } from "@/lib/proxyGeo";
 
 const STATUS_COLORS: Record<string, string> = {
   Sucesso: "#16a34a",
@@ -156,6 +157,42 @@ export default function AutomationReportPage() {
                   </li>
                 ))}
               </ul>
+            )}
+          </div>
+
+          <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+            <h2 className="mb-3 text-sm font-semibold text-slate-900">
+              Cidade do proxy (IP de saída)
+            </h2>
+            {(report.proxyGeoRows ?? []).length === 0 ? (
+              <p className="text-sm text-slate-500">
+                Nenhum lookup de geo do proxy no período (roda no início de cada job).
+              </p>
+            ) : (
+              <table className="min-w-full divide-y divide-slate-200 text-sm">
+                <thead>
+                  <tr className="text-left text-xs font-medium uppercase tracking-wide text-slate-500">
+                    <th className="py-2 pr-3">Motorista</th>
+                    <th className="py-2 pr-3">Status</th>
+                    <th className="py-2 pr-3">Cidade proxy</th>
+                    <th className="py-2">IP</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {report.proxyGeoRows.map((row) => (
+                    <tr key={row.id}>
+                      <td className="py-2 pr-3 font-medium text-slate-800">{row.fullName}</td>
+                      <td className="py-2 pr-3 text-slate-600">{row.status}</td>
+                      <td className="py-2 pr-3 text-slate-700">
+                        {formatProxyGeoLabel(row.proxyGeoCity, row.proxyGeoRegion)}
+                      </td>
+                      <td className="py-2 font-mono text-xs text-slate-500">
+                        {row.proxyExternalIp ?? "—"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             )}
           </div>
         </>

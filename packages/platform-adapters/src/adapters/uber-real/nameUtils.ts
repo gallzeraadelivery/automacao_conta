@@ -51,18 +51,26 @@ export function buildPlaceholderPassword(fullName: string, suffix: string): stri
  * `(561) 325-6600`. A alocação “próximo livre” (sem repetir os que foram
  * ao hub) fica em `nextFreePlaceholderPhoneDigits` + pool do worker.
  *
- * Base configurável via `UBER_PLACEHOLDER_PHONE_BASE` (10 dígitos, só números).
- * Padrão: 5613265300.
+ * Base configurável via painel (`company_settings.placeholder_phone_base`)
+ * ou env `UBER_PLACEHOLDER_PHONE_BASE` (10 dígitos). Padrão: 5613265300.
  */
-const DEFAULT_PHONE_BASE_DIGITS = "5613265300";
+export const DEFAULT_PHONE_BASE_DIGITS = "5613265300";
 
-export function resolvePhoneBaseDigits(): string {
-  const raw = (process.env.UBER_PLACEHOLDER_PHONE_BASE ?? DEFAULT_PHONE_BASE_DIGITS).replace(
-    /\D/g,
-    "",
-  );
-  if (raw.length !== 10) return DEFAULT_PHONE_BASE_DIGITS;
-  return raw;
+export function normalizePhoneBaseDigits(raw: string | null | undefined): string {
+  const digits = (raw ?? "").replace(/\D/g, "");
+  if (digits.length !== 10) return DEFAULT_PHONE_BASE_DIGITS;
+  return digits;
+}
+
+/**
+ * Resolve a base efetiva. `override` (ex.: valor do banco) tem prioridade
+ * sobre a env; se ambos inválidos, cai no DEFAULT.
+ */
+export function resolvePhoneBaseDigits(override?: string | null): string {
+  if (override != null && String(override).trim() !== "") {
+    return normalizePhoneBaseDigits(override);
+  }
+  return normalizePhoneBaseDigits(process.env.UBER_PLACEHOLDER_PHONE_BASE);
 }
 
 export function toPhoneDigits(phone: string): string {
@@ -75,8 +83,8 @@ export function formatUsPhoneFromDigits(digits10: string): string {
 }
 
 /** Índice 0 = base, 1 = base+1, … */
-export function buildPlaceholderPhone(_applicantId: string, attempt = 0): string {
-  const baseNum = Number.parseInt(resolvePhoneBaseDigits(), 10);
+export function buildPlaceholderPhone(_applicantId: string, attempt = 0, baseOverride?: string): string {
+  const baseNum = Number.parseInt(resolvePhoneBaseDigits(baseOverride), 10);
   const next = baseNum + Math.max(0, attempt);
   return formatUsPhoneFromDigits(next.toString().padStart(10, "0").slice(-10));
 }
@@ -88,11 +96,12 @@ export function buildPlaceholderPhone(_applicantId: string, attempt = 0): string
 export function nextFreePlaceholderPhoneDigits(
   blockedDigits: Iterable<string>,
   maxScan = 10_000,
+  baseOverride?: string,
 ): string {
   const blocked = new Set(
     [...blockedDigits].map((d) => d.replace(/\D/g, "").slice(-10)).filter((d) => d.length === 10),
   );
-  const baseNum = Number.parseInt(resolvePhoneBaseDigits(), 10);
+  const baseNum = Number.parseInt(resolvePhoneBaseDigits(baseOverride), 10);
   for (let i = 0; i < maxScan; i++) {
     const digits = (baseNum + i).toString().padStart(10, "0").slice(-10);
     if (!blocked.has(digits)) return digits;

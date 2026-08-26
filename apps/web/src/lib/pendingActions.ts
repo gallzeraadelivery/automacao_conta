@@ -5,6 +5,9 @@ export interface PendingActionView {
   email: string;
   phone: string | null;
   city: string | null;
+  proxyGeoCity: string | null;
+  proxyGeoRegion: string | null;
+  proxyExternalIp: string | null;
   vehicleType: string | null;
   status: string;
   currentStep: string | null;
@@ -36,6 +39,7 @@ export const PAUSE_REASON_LABELS: Record<string, string> = {
   TWO_FACTOR: "Autenticação em duas etapas (2FA)",
   SECURITY_BLOCK: "Bloqueio de segurança",
   PHONE_PROBLEM: "Problema celular",
+  PAGE_UNAVAILABLE: "Página indisponível",
   REFUSED: "Recusado pela Uber",
 };
 

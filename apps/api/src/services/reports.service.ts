@@ -18,6 +18,16 @@ export interface AutomationReport {
   providerDistribution: { socure: number; other: number; unknown: number };
   errorDistribution: Record<string, number>;
   topErrors: Array<{ code: string; count: number; message: string }>;
+  /** Motoristas do período com geo do proxy (lookup). */
+  proxyGeoRows: Array<{
+    id: string;
+    externalId: string;
+    fullName: string;
+    status: string;
+    proxyExternalIp: string | null;
+    proxyGeoCity: string | null;
+    proxyGeoRegion: string | null;
+  }>;
 }
 
 /**
@@ -133,6 +143,17 @@ export async function buildAutomationReport(
     providerDistribution,
     errorDistribution,
     topErrors,
+    proxyGeoRows: processed
+      .filter((row) => row.proxyGeoCity || row.proxyGeoRegion || row.proxyExternalIp)
+      .map((row) => ({
+        id: row.id,
+        externalId: row.externalId,
+        fullName: row.fullName,
+        status: row.status,
+        proxyExternalIp: row.proxyExternalIp ?? null,
+        proxyGeoCity: row.proxyGeoCity ?? null,
+        proxyGeoRegion: row.proxyGeoRegion ?? null,
+      })),
   };
 }
 
@@ -234,6 +255,10 @@ export interface VerificationReportRow {
   profilePhotoConfidence: string | null;
   driverLicenseProvider: string | null;
   driverLicenseConfidence: string | null;
+  proxyExternalIp: string | null;
+  proxyGeoCity: string | null;
+  proxyGeoRegion: string | null;
+  cookiesDownloadedAt: Date | null;
   pausedAt: Date | null;
   updatedAt: Date;
 }
@@ -270,6 +295,10 @@ export async function listVerificationReport(
       profilePhotoConfidence: applicants.profilePhotoConfidence,
       driverLicenseProvider: applicants.driverLicenseProvider,
       driverLicenseConfidence: applicants.driverLicenseConfidence,
+      proxyExternalIp: applicants.proxyExternalIp,
+      proxyGeoCity: applicants.proxyGeoCity,
+      proxyGeoRegion: applicants.proxyGeoRegion,
+      cookiesDownloadedAt: applicants.cookiesDownloadedAt,
       pausedAt: applicants.pausedAt,
       updatedAt: applicants.updatedAt,
     })
@@ -296,4 +325,134 @@ export async function listVerificationReport(
         : rows.filter((row) => hasProvider(row, "VERIFF"));
 
   return { filter, counts, total: items.length, items };
+}
+
+export interface SocureProxyGeoCityRow {
+  city: string;
+  region: string;
+  total: number;
+  socure: number;
+  veriff: number;
+  identidade: number;
+  security: number;
+  phone: number;
+  pctSocure: number;
+  pctVeriff: number;
+}
+
+export interface SocureProxyGeoReport {
+  totals: {
+    withGeo: number;
+    cities: number;
+    socure: number;
+    veriff: number;
+    identidade: number;
+    security: number;
+    phone: number;
+  };
+  /** Ranking absoluto por Socure (provider). */
+  bySocure: SocureProxyGeoCityRow[];
+  /** Ranking absoluto por Veriff (pause NON_SOCURE_PROVIDER). */
+  byVeriff: SocureProxyGeoCityRow[];
+  /** Melhor taxa Socure com total >= minSample. */
+  bySocureRate: SocureProxyGeoCityRow[];
+}
+
+/**
+ * BI: cidades do proxy × Socure (foto/CNH) e Veriff (pause NON_SOCURE_PROVIDER).
+ * Só inclui motoristas com `proxy_geo_city` preenchido.
+ */
+export async function buildSocureProxyGeoReport(
+  companyId: string,
+  options: { minSampleForRate?: number } = {},
+): Promise<SocureProxyGeoReport> {
+  const minSample = options.minSampleForRate ?? 3;
+
+  const rows = await db
+    .select({
+      proxyGeoCity: applicants.proxyGeoCity,
+      proxyGeoRegion: applicants.proxyGeoRegion,
+      profilePhotoProvider: applicants.profilePhotoProvider,
+      driverLicenseProvider: applicants.driverLicenseProvider,
+      pauseReason: applicants.pauseReason,
+      currentStep: applicants.currentStep,
+    })
+    .from(applicants)
+    .where(
+      and(
+        eq(applicants.companyId, companyId),
+        sql`${applicants.proxyGeoCity} is not null and trim(${applicants.proxyGeoCity}) <> ''`,
+      ),
+    );
+
+  const byKey = new Map<
+    string,
+    {
+      city: string;
+      region: string;
+      total: number;
+      socure: number;
+      veriff: number;
+      identidade: number;
+      security: number;
+      phone: number;
+    }
+  >();
+
+  for (const row of rows) {
+    const city = (row.proxyGeoCity ?? "").trim() || "(sem cidade)";
+    const region = (row.proxyGeoRegion ?? "").trim();
+    const key = `${city.toLowerCase()}|${region.toLowerCase()}`;
+    let agg = byKey.get(key);
+    if (!agg) {
+      agg = { city, region, total: 0, socure: 0, veriff: 0, identidade: 0, security: 0, phone: 0 };
+      byKey.set(key, agg);
+    }
+    agg.total += 1;
+    if (row.profilePhotoProvider === "SOCURE" || row.driverLicenseProvider === "SOCURE") {
+      agg.socure += 1;
+    }
+    if (row.pauseReason === "NON_SOCURE_PROVIDER") {
+      agg.veriff += 1;
+    }
+    if (row.pauseReason === "IDENTITY_VERIFICATION_REQUIRED") {
+      agg.identidade += 1;
+    }
+    if (row.pauseReason === "SECURITY_BLOCK") {
+      agg.security += 1;
+    }
+    if (row.pauseReason === "PHONE_PROBLEM" || row.currentStep === "PHONE_PROBLEM") {
+      agg.phone += 1;
+    }
+  }
+
+  const cities: SocureProxyGeoCityRow[] = [...byKey.values()].map((agg) => ({
+    ...agg,
+    pctSocure: agg.total > 0 ? Math.round((1000 * agg.socure) / agg.total) / 10 : 0,
+    pctVeriff: agg.total > 0 ? Math.round((1000 * agg.veriff) / agg.total) / 10 : 0,
+  }));
+
+  const bySocure = [...cities]
+    .filter((c) => c.socure > 0)
+    .sort((a, b) => b.socure - a.socure || b.total - a.total);
+
+  const byVeriff = [...cities]
+    .filter((c) => c.veriff > 0)
+    .sort((a, b) => b.veriff - a.veriff || b.total - a.total);
+
+  const bySocureRate = [...cities]
+    .filter((c) => c.total >= minSample && c.socure > 0)
+    .sort((a, b) => b.pctSocure - a.pctSocure || b.socure - a.socure);
+
+  const totals = {
+    withGeo: rows.length,
+    cities: cities.length,
+    socure: cities.reduce((s, c) => s + c.socure, 0),
+    veriff: cities.reduce((s, c) => s + c.veriff, 0),
+    identidade: cities.reduce((s, c) => s + c.identidade, 0),
+    security: cities.reduce((s, c) => s + c.security, 0),
+    phone: cities.reduce((s, c) => s + c.phone, 0),
+  };
+
+  return { totals, bySocure, byVeriff, bySocureRate };
 }

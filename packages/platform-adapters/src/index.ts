@@ -37,8 +37,10 @@ export { REAL_UBER_CONFIG, type RealUberConfig } from "./adapters/uber-real/real
 export {
   buildPlaceholderPhone,
   buildPlaceholderPassword,
+  DEFAULT_PHONE_BASE_DIGITS,
   formatUsPhoneFromDigits,
   nextFreePlaceholderPhoneDigits,
+  normalizePhoneBaseDigits,
   toPhoneDigits,
   resolvePhoneBaseDigits,
   splitFullName,

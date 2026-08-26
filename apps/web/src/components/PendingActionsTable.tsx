@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { apiRequest } from "@/lib/apiClient";
 import { pauseReasonLabel, type PendingActionView } from "@/lib/pendingActions";
+import { formatProxyGeoLabel } from "@/lib/proxyGeo";
 import { DeliverToDriverModal } from "./DeliverToDriverModal";
 
 const PROVIDER_LABELS: Record<string, string> = {
@@ -80,6 +81,7 @@ export function PendingActionsTable() {
             <tr className="text-left text-xs font-medium uppercase tracking-wide text-slate-500">
               <th className="px-4 py-3">Motorista</th>
               <th className="px-4 py-3">E-mail</th>
+              <th className="px-4 py-3">Cidade proxy</th>
               <th className="px-4 py-3">Etapa</th>
               <th className="px-4 py-3">Motivo</th>
               <th className="px-4 py-3">Foto</th>
@@ -98,6 +100,9 @@ export function PendingActionsTable() {
                   </Link>
                 </td>
                 <td className="px-4 py-3 text-slate-600">{item.email}</td>
+                <td className="px-4 py-3 text-slate-600" title={item.proxyExternalIp ?? undefined}>
+                  {formatProxyGeoLabel(item.proxyGeoCity, item.proxyGeoRegion)}
+                </td>
                 <td className="px-4 py-3 text-slate-600">{item.currentStep ?? "-"}</td>
                 <td className="px-4 py-3 text-slate-600">{pauseReasonLabel(item.pauseReason)}</td>
                 <td className="px-4 py-3">

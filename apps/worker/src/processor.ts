@@ -13,6 +13,7 @@ import {
 import { NonRetryableAutomationError, TechnicalAutomationError, AutomationStoppedError } from "./errors";
 import { MAX_ATTEMPTS } from "./backoff";
 import { AUTOMATION_STEPS, type AutomationJob } from "./automationJob.types";
+import { applicantHasUberAccountCreated } from "./uberAutomationRunner";
 
 export const CONCURRENCY_LIMITS = {
   company: 5,
@@ -148,7 +149,8 @@ export async function processAutomationJob(
       await deps.applicantStatusRepository?.markCompleted?.(data.applicantId);
     }
   } catch (error) {
-    await handleJobError(job, error, deps);
+    const rescheduled = await handleJobError(job, error, deps);
+    if (rescheduled) throw new DelayedError();
     throw error;
   } finally {
     await releaseAll(deps.limiter, acquiredKeys);
@@ -210,7 +212,7 @@ async function handleJobError(
   job: AutomationJobLike,
   error: unknown,
   deps: ProcessAutomationJobDeps,
-): Promise<void> {
+): Promise<boolean> {
   const data = job.data;
 
   if (error instanceof AutomationStoppedError) {
@@ -231,12 +233,32 @@ async function handleJobError(
     } else {
       await deps.applicantStatusRepository?.markFailed?.(data.applicantId, "STOPPED");
     }
-    return;
+    return false;
   }
 
   if (error instanceof NonRetryableAutomationError || error instanceof SecurityChallengeError) {
-    job.discard();
     const reason = error instanceof NonRetryableAutomationError ? error.reason : error.challenge;
+
+    // Legado PHONE_PROBLEM → retenta como técnico (só Veriff/Socure encerram de verdade).
+    if (error instanceof NonRetryableAutomationError && reason === "PHONE_PROBLEM") {
+      await deps.auditLogger.log({
+        companyId: data.companyId,
+        applicantId: data.applicantId,
+        action: "automation_job_phone_problem",
+        metadata: {
+          step: data.currentStep,
+          reason,
+          retryable: true,
+          detail: error instanceof Error ? error.message : undefined,
+        },
+      });
+      throw new TechnicalAutomationError(
+        "PHONE_SMS_RETRY",
+        error.message || "Problema celular — retentando com outros números",
+      );
+    }
+
+    job.discard();
 
     // Internal Server Error / fluxo Uber quebrado: descarta e-mail, sem
     // enfileirar na Central de Pendências (não há ação humana útil).
@@ -262,25 +284,7 @@ async function handleJobError(
       } else {
         await deps.applicantStatusRepository?.markFailed?.(data.applicantId, String(reason));
       }
-      return;
-    }
-
-    // 2 SMS ruins: FAILED + aviso "problema celular" — pode recomeçar depois
-    // com outros números (blacklist já tem os rejeitados). Segue a fila.
-    if (reason === "PHONE_PROBLEM") {
-      await deps.auditLogger.log({
-        companyId: data.companyId,
-        applicantId: data.applicantId,
-        action: "automation_job_phone_problem",
-        metadata: {
-          step: data.currentStep,
-          reason,
-          retryable: false,
-          detail: error instanceof Error ? error.message : undefined,
-        },
-      });
-      await deps.applicantStatusRepository?.markFailed?.(data.applicantId, "PHONE_PROBLEM");
-      return;
+      return false;
     }
 
     await deps.auditLogger.log({
@@ -307,7 +311,7 @@ async function handleJobError(
         error instanceof NonRetryableAutomationError ? error.providers : undefined,
       );
     }
-    return;
+    return false;
   }
 
   const attempt = job.attemptsMade + 1;
@@ -335,6 +339,35 @@ async function handleJobError(
   // Pendencias (que so lista AWAITING_HUMAN_ACTION) nem em lugar nenhum
   // visivel para o operador.
   if (exhausted) {
-    await deps.applicantStatusRepository?.markFailed?.(data.applicantId, String(reason));
+    const accountCreated = await applicantHasUberAccountCreated(data.applicantId).catch(
+      () => false,
+    );
+
+    // Conta criada: objetivo é Socure/Veriff — reagenda em vez de liberar READY.
+    if (accountCreated) {
+      await deps.auditLogger.log({
+        companyId: data.companyId,
+        applicantId: data.applicantId,
+        action: "automation_job_account_created_probe_retry",
+        metadata: {
+          step: data.currentStep,
+          reason,
+          attempt,
+          maxAttempts,
+          detail: error instanceof Error ? error.message : String(error),
+        },
+      });
+      await job.moveToDelayed(Date.now() + 45_000, job.token);
+      return true;
+    }
+
+    // Sem conta: libera fila (READY) — lote segue.
+    if (deps.applicantStatusRepository?.markStopped) {
+      await deps.applicantStatusRepository.markStopped(data.applicantId);
+    } else {
+      await deps.applicantStatusRepository?.markFailed?.(data.applicantId, String(reason));
+    }
   }
+
+  return false;
 }

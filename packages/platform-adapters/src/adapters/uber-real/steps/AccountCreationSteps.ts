@@ -12,7 +12,7 @@ import { dismissCookieBannerIfPresent } from "./PreferencesSteps";
  * "Continuar" e "Next →" (com seta). `$` evita casar "Continue with Google"
  * / "Continue with Apple" / "Continue with Email".
  */
-const PRIMARY_NEXT_NAME = /^(continuar|continue|next|pr[oó]ximo)(\s*→)?$/i;
+const PRIMARY_NEXT_NAME = /^(continuar|continue|next|pr[oó]ximo|join now)(\s*→)?$/i;
 
 async function clickPrimaryNext(ctx: RealStepContext, timeout: number): Promise<void> {
   const btn = ctx.page.getByRole("button", { name: PRIMARY_NEXT_NAME }).first();
@@ -273,7 +273,7 @@ async function waitAfterPhoneSubmit(page: Page, timeout: number): Promise<AfterP
 }
 
 /** Quantas vezes tenta outro placeholder na MESMA sessão (Back / change number). */
-/** SMS ruim → troca número; na 2ª recusa → PHONE_PROBLEM (não rotaciona sessão). */
+/** SMS ruim → troca número; na 2ª recusa → PHONE_SMS_RETRY (Bull retenta; não rotaciona FP). */
 const PHONE_PLACEHOLDER_IN_SESSION_ATTEMPTS = 2;
 
 /**
@@ -1153,15 +1153,15 @@ export async function fillEmailCodeStep(ctx: RealStepContext): Promise<void> {
  * motorista) - o atendente corrige na finalização do cadastro.
  *
  * Alocação: próximo livre (hub **ou** SMS rejeitado na blacklist). SMS →
- * marca e tenta outro na sessão; 2 recusas → PHONE_PROBLEM (FAILED, tenta
- * depois com outros números; não rotaciona fingerprint).
+ * marca e tenta outro na sessão; 2 recusas → PHONE_SMS_RETRY (Bull retenta
+ * o job com novos números — só pausa humana em Veriff/Socure).
  */
 export async function fillPhoneStep(ctx: RealStepContext): Promise<void> {
   const { page, context, config } = ctx;
   const offset = context.phoneAttemptOffset ?? 0;
 
   const refusePhoneProblem = (detail: string): never => {
-    throw new AutomationPauseSignal("PHONE_PROBLEM", undefined, detail);
+    throw new AutomationTechnicalError("PHONE_SMS_RETRY", detail);
   };
 
   try {
@@ -1217,25 +1217,25 @@ export async function fillPhoneStep(ctx: RealStepContext): Promise<void> {
         });
 
         if (smsAttempt >= PHONE_PLACEHOLDER_IN_SESSION_ATTEMPTS) {
-          await ctx.recordStep("PHONE_PROBLEM", {
+          await ctx.recordStep("PHONE_SMS_RETRY", {
             smsRejects: smsAttempt,
             phoneLast4: phone.replace(/\D/g, "").slice(-4),
           });
           refusePhoneProblem(
-            `Problema celular: Uber pediu OTP SMS em ${smsAttempt} números — recusado para tentar depois com outros números`,
+            `Problema celular: Uber pediu OTP SMS em ${smsAttempt} números — retentando job com outros números`,
           );
         }
 
         try {
           await restartPhoneEntryAfterSms(page, config);
         } catch {
-          await ctx.recordStep("PHONE_PROBLEM", {
+          await ctx.recordStep("PHONE_SMS_RETRY", {
             smsRejects: smsAttempt,
             reason: "restart_phone_entry_failed",
             phoneLast4: phone.replace(/\D/g, "").slice(-4),
           });
           refusePhoneProblem(
-            `Problema celular: não foi possível trocar o telefone após SMS (tentativa ${smsAttempt}) — recusado para tentar depois`,
+            `Problema celular: não foi possível trocar o telefone após SMS (tentativa ${smsAttempt}) — retentando job`,
           );
         }
         continue;
@@ -1276,10 +1276,9 @@ export async function fillPasswordStep(ctx: RealStepContext): Promise<void> {
     // atrasado / SMS residual.
     const outcome = await waitAfterPhoneSubmit(page, config.timeouts.elementWait);
     if (outcome === "sms") {
-      throw new AutomationPauseSignal(
-        "PHONE_PROBLEM",
-        undefined,
-        "Problema celular: Uber pediu OTP SMS antes da senha — recusado para tentar depois com outros números",
+      throw new AutomationTechnicalError(
+        "PHONE_SMS_RETRY",
+        "Problema celular: Uber pediu OTP SMS antes da senha — retentando com outros números",
       );
     }
     if (outcome !== "password") {

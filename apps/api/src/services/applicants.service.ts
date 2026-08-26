@@ -1,6 +1,6 @@
 import path from "node:path";
 import { access, readFile, readdir, rm, unlink } from "node:fs/promises";
-import { and, eq, inArray, or, sql } from "drizzle-orm";
+import { and, desc, eq, ilike, inArray, or, sql } from "drizzle-orm";
 import {
   db,
   applicants,
@@ -27,6 +27,8 @@ import {
 } from "../lib/automationQueue";
 import { env } from "../env";
 import { defaultBrowserProfilesRoot, MONOREPO_ROOT, resolveApplicantProfileDir } from "../lib/storagePaths";
+import { buildZipBuffer } from "../lib/zipStore";
+import { findReservedEmails, recordUsedEmails } from "./usedEmails.service";
 
 export interface ApplicantPreviewRow {
   row: number;
@@ -78,7 +80,7 @@ export async function validateApplicantImport(
     .map((r) => r.data.proxy_id)
     .filter((id): id is string => Boolean(id));
 
-  const [existingApplicants, existingProxies] = await Promise.all([
+  const [existingApplicants, existingProxies, reservedEmails] = await Promise.all([
     db
       .select({ externalId: applicants.externalId, email: applicants.email })
       .from(applicants)
@@ -97,6 +99,7 @@ export async function validateApplicantImport(
           .from(proxyConfigs)
           .where(and(eq(proxyConfigs.companyId, companyId), inArray(proxyConfigs.id, proxyIds)))
       : Promise.resolve([]),
+    findReservedEmails(companyId, emails),
   ]);
 
   const existingExternalIds = new Set(existingApplicants.map((a) => a.externalId));
@@ -113,11 +116,11 @@ export async function validateApplicantImport(
         message: "Já existe um motorista com este external_id nesta empresa",
       });
     }
-    if (existingEmails.has(data.email.toLowerCase())) {
+    if (existingEmails.has(data.email.toLowerCase()) || reservedEmails.has(data.email.toLowerCase())) {
       errors.push({
         row,
         field: "email",
-        message: "Já existe um motorista com este email nesta empresa",
+        message: "Este e-mail já foi usado e não pode ser reimportado",
       });
     }
     if (data.proxy_id && !existingProxyIds.has(data.proxy_id)) {
@@ -177,6 +180,11 @@ export async function importApplicants(
   }));
 
   await db.insert(applicants).values(rowsToInsert);
+  await recordUsedEmails(
+    companyId,
+    rowsToInsert.map((row) => row.email),
+    "import",
+  );
 
   return {
     imported: rowsToInsert.length,
@@ -185,22 +193,48 @@ export async function importApplicants(
   };
 }
 
-export async function listApplicants(
-  companyId: string,
-  params: { page: number; pageSize: number; status?: string },
-) {
-  const offset = (params.page - 1) * params.pageSize;
+export interface ListApplicantsParams {
+  page: number;
+  pageSize: number;
+  status?: string;
+  pauseReason?: string;
+  q?: string;
+}
 
-  const whereClause = params.status
-    ? and(eq(applicants.companyId, companyId), eq(applicants.status, params.status))
-    : eq(applicants.companyId, companyId);
+export async function listApplicants(companyId: string, params: ListApplicantsParams) {
+  const offset = (params.page - 1) * params.pageSize;
+  const filters = [eq(applicants.companyId, companyId)];
+
+  if (params.status) {
+    filters.push(eq(applicants.status, params.status));
+  }
+  if (params.pauseReason) {
+    filters.push(eq(applicants.pauseReason, params.pauseReason));
+  }
+
+  const q = params.q?.trim();
+  if (q) {
+    const pattern = `%${q}%`;
+    filters.push(
+      or(
+        ilike(applicants.fullName, pattern),
+        ilike(applicants.email, pattern),
+        ilike(applicants.externalId, pattern),
+      )!,
+    );
+  }
+
+  const whereClause = and(...filters);
 
   const [items, countRows] = await Promise.all([
-    db.select().from(applicants).where(whereClause).limit(params.pageSize).offset(offset),
     db
-      .select({ count: sql<number>`count(*)::int` })
+      .select()
       .from(applicants)
-      .where(whereClause),
+      .where(whereClause)
+      .orderBy(desc(applicants.updatedAt), applicants.fullName)
+      .limit(params.pageSize)
+      .offset(offset),
+    db.select({ count: sql<number>`count(*)::int` }).from(applicants).where(whereClause),
   ]);
   const count = countRows[0]?.count ?? 0;
 
@@ -509,6 +543,7 @@ export async function deleteApplicant(companyId: string, applicantId: string): P
     throw new HttpError(404, "NOT_FOUND", "Motorista não encontrado");
   }
 
+  await recordUsedEmails(companyId, [applicant.email], "deleted");
   await cancelAutomationJobsForApplicant(applicantId).catch(() => 0);
 
   await db
@@ -539,6 +574,85 @@ export async function deleteApplicant(companyId: string, applicantId: string): P
         .map((name) => unlink(path.join(root, name)).catch(() => undefined)),
     );
   }
+}
+
+/**
+ * Apaga todos os Veriff (`NON_SOCURE_PROVIDER`). Socure permanece.
+ * E-mails são gravados em `used_emails` antes do DELETE.
+ *
+ * Bulk (não chama deleteApplicant em loop): o loop antigo varria a pasta
+ * inteira de screenshots por motorista e estourava timeout no browser.
+ */
+export async function purgeVeriffApplicants(
+  companyId: string,
+): Promise<{ deleted: number; emailsReserved: number }> {
+  const rows = await db
+    .select({ id: applicants.id, email: applicants.email })
+    .from(applicants)
+    .where(
+      and(eq(applicants.companyId, companyId), eq(applicants.pauseReason, "NON_SOCURE_PROVIDER")),
+    );
+
+  if (rows.length === 0) {
+    return { deleted: 0, emailsReserved: 0 };
+  }
+
+  const ids = rows.map((row) => row.id);
+  const idSet = new Set(ids);
+
+  const emailsReserved = await recordUsedEmails(
+    companyId,
+    rows.map((row) => row.email),
+    "veriff_purge",
+  );
+
+  // Cancela jobs Bull (best-effort) sem bloquear o purge.
+  await Promise.all(
+    ids.map((id) => cancelAutomationJobsForApplicant(id).catch(() => 0)),
+  );
+
+  // audit_logs.applicant_id tem FK sem ON DELETE → precisa desvincular antes.
+  await db
+    .update(auditLogs)
+    .set({ applicantId: null })
+    .where(inArray(auditLogs.applicantId, ids));
+
+  // CASCADE cobre email_accounts / browser_profiles / driver_deliveries.
+  await db
+    .delete(applicants)
+    .where(and(eq(applicants.companyId, companyId), inArray(applicants.id, ids)));
+
+  // Limpeza de disco em uma passada (não readdir N vezes).
+  const profilesRoot =
+    env.BROWSER_PROFILES_STORAGE_PATH || defaultBrowserProfilesRoot();
+  await Promise.all(
+    ids.map(async (applicantId) => {
+      const profileDir = await resolveApplicantProfileDir(profilesRoot, applicantId);
+      await rm(profileDir, { recursive: true, force: true }).catch(() => undefined);
+    }),
+  );
+
+  const screenshotRoots = [
+    path.isAbsolute(env.AUTOMATION_SCREENSHOTS_PATH)
+      ? env.AUTOMATION_SCREENSHOTS_PATH
+      : path.resolve(MONOREPO_ROOT, env.AUTOMATION_SCREENSHOTS_PATH),
+    path.resolve(MONOREPO_ROOT, "apps/worker/storage/automation-screenshots"),
+    path.resolve(MONOREPO_ROOT, "storage/automation-screenshots"),
+  ];
+  for (const root of [...new Set(screenshotRoots)]) {
+    const files = await readdir(root).catch(() => [] as string[]);
+    await Promise.all(
+      files
+        .filter((name) => {
+          const dash = name.indexOf("-");
+          if (dash <= 0) return false;
+          return idSet.has(name.slice(0, dash));
+        })
+        .map((name) => unlink(path.join(root, name)).catch(() => undefined)),
+    );
+  }
+
+  return { deleted: ids.length, emailsReserved };
 }
 
 export interface UberCookiesExport {
@@ -697,6 +811,121 @@ export async function getUberCookiesExport(
     netscapeCookies: toNetscapeCookies(cookies),
     exportedAt: new Date().toISOString(),
   };
+}
+
+/**
+ * Marca (ou desmarca) cookies como já baixados pelo operador.
+ */
+export async function setCookiesDownloaded(
+  companyId: string,
+  applicantIds: string[],
+  downloaded: boolean,
+): Promise<{ updated: number }> {
+  const uniqueIds = [...new Set(applicantIds.filter(Boolean))];
+  if (uniqueIds.length === 0) {
+    return { updated: 0 };
+  }
+
+  const result = await db
+    .update(applicants)
+    .set({
+      cookiesDownloadedAt: downloaded ? new Date() : null,
+      updatedAt: new Date(),
+    })
+    .where(and(eq(applicants.companyId, companyId), inArray(applicants.id, uniqueIds)))
+    .returning({ id: applicants.id });
+
+  return { updated: result.length };
+}
+
+export interface UberCookiesZipResult {
+  zip: Buffer;
+  included: Array<{ id: string; externalId: string; fullName: string }>;
+  skipped: Array<{ id: string; reason: string }>;
+}
+
+/**
+ * Empacota cookies AdsPower de vários motoristas em um ZIP.
+ * Marca como baixados apenas os que entraram no arquivo.
+ */
+export async function exportUberCookiesZip(
+  companyId: string,
+  applicantIds: string[],
+): Promise<UberCookiesZipResult> {
+  const uniqueIds = [...new Set(applicantIds.filter(Boolean))];
+  if (uniqueIds.length === 0) {
+    throw new HttpError(400, "EMPTY_SELECTION", "Selecione ao menos um motorista");
+  }
+
+  const rows = await db
+    .select({
+      id: applicants.id,
+      externalId: applicants.externalId,
+      fullName: applicants.fullName,
+    })
+    .from(applicants)
+    .where(and(eq(applicants.companyId, companyId), inArray(applicants.id, uniqueIds)));
+
+  const byId = new Map(rows.map((r) => [r.id, r]));
+  const included: UberCookiesZipResult["included"] = [];
+  const skipped: UberCookiesZipResult["skipped"] = [];
+  const zipEntries: Array<{ name: string; data: Buffer }> = [];
+  const usedNames = new Set<string>();
+
+  for (const id of uniqueIds) {
+    const row = byId.get(id);
+    if (!row) {
+      skipped.push({ id, reason: "Motorista não encontrado" });
+      continue;
+    }
+    try {
+      const exported = await getUberCookiesExport(companyId, id);
+      let base = `adspower-cookies-${exported.externalId.replace(/[^a-zA-Z0-9._-]/g, "_")}.json`;
+      if (usedNames.has(base)) {
+        base = `adspower-cookies-${exported.externalId.replace(/[^a-zA-Z0-9._-]/g, "_")}-${id.slice(0, 8)}.json`;
+      }
+      usedNames.add(base);
+      zipEntries.push({
+        name: base,
+        data: Buffer.from(JSON.stringify(exported.adsPowerCookies), "utf8"),
+      });
+      included.push({ id: row.id, externalId: row.externalId, fullName: row.fullName });
+    } catch (error) {
+      const reason =
+        error instanceof HttpError ? error.message : "Falha ao ler cookies";
+      skipped.push({ id, reason });
+    }
+  }
+
+  if (zipEntries.length === 0) {
+    throw new HttpError(
+      404,
+      "COOKIES_NOT_FOUND",
+      "Nenhum cookie disponível para a seleção (sessão vazia ou não persistida)",
+    );
+  }
+
+  if (skipped.length > 0) {
+    const lines = skipped.map((s) => {
+      const row = byId.get(s.id);
+      const label = row ? `${row.fullName} (${row.externalId})` : s.id;
+      return `${label}: ${s.reason}`;
+    });
+    zipEntries.push({
+      name: "_erros.txt",
+      data: Buffer.from(lines.join("\n") + "\n", "utf8"),
+    });
+  }
+
+  const zip = buildZipBuffer(zipEntries);
+
+  await setCookiesDownloaded(
+    companyId,
+    included.map((r) => r.id),
+    true,
+  );
+
+  return { zip, included, skipped };
 }
 
 /**

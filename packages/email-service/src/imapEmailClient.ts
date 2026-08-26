@@ -1,5 +1,5 @@
 import { ImapFlow } from "imapflow";
-import { simpleParser } from "mailparser";
+import { simpleParser, type ParsedMail } from "mailparser";
 import type {
   GmailMessage,
   GmailSessionData,
@@ -17,6 +17,37 @@ export interface ImapEmailClientOptions {
 
 const DEFAULT_HOST = "imap.gmail.com";
 const DEFAULT_PORT = 993;
+
+/** Endereços de destino visíveis no envelope/cabeçalho (catch-all / forward). */
+function collectRecipientAddresses(parsed: ParsedMail): string[] {
+  const out = new Set<string>();
+  for (const field of [parsed.to, parsed.cc, parsed.bcc]) {
+    for (const entry of field?.value ?? []) {
+      if (entry.address) out.add(entry.address.toLowerCase());
+    }
+  }
+  const headerKeys = [
+    "delivered-to",
+    "x-delivered-to",
+    "x-original-to",
+    "envelope-to",
+    "x-envelope-to",
+    "x-forwarded-to",
+    "x-rcpt-to",
+  ];
+  for (const key of headerKeys) {
+    const raw = parsed.headers.get(key);
+    if (!raw) continue;
+    const values = Array.isArray(raw) ? raw : [raw];
+    for (const value of values) {
+      const text = String(value);
+      for (const match of text.matchAll(/[\w.+-]+@[\w.-]+\.\w+/g)) {
+        out.add(match[0]!.toLowerCase());
+      }
+    }
+  }
+  return [...out];
+}
 
 /**
  * imapflow lança só "Command failed" na mensagem principal - o motivo de
@@ -182,6 +213,7 @@ export class ImapEmailClient implements IGmailClient {
         if (receivedAt.getTime() < query.afterDate.getTime() - 120_000) {
           continue;
         }
+        const toAddresses = collectRecipientAddresses(parsed);
         messages.push({
           id: String(message.uid),
           // address preferencial; se o provedor só mandar display-name
@@ -194,14 +226,29 @@ export class ImapEmailClient implements IGmailClient {
             "",
           subject: parsed.subject ?? "",
           snippet: "",
-          bodyText: parsed.text?.trim()
-            ? parsed.text
-            : typeof parsed.html === "string"
-              ? parsed.html.replace(/<[^>]+>/g, " ")
-              : "",
+          // Uber OTP: HTML com "Verification code:" longe do <p>8606</p>
+          // (centenas de espaços/tags). Sem colapsar whitespace, o regex
+          // \D{0,40} do extrator falha mesmo com o código no corpo.
+          bodyText: (() => {
+            const plain = parsed.text?.trim() ?? "";
+            const fromHtml =
+              typeof parsed.html === "string"
+                ? parsed.html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim()
+                : "";
+            // Preferir HTML normalizado se o plain text não traz keyword+código.
+            if (
+              fromHtml &&
+              (!plain || !/(?:c[oó]digo|code|otp|pin|verification)\D{0,40}\d{4}/i.test(plain))
+            ) {
+              return fromHtml;
+            }
+            return plain || fromHtml;
+          })(),
+          toAddresses,
           receivedAt,
         });
       }
+      messages.sort((a, b) => b.receivedAt.getTime() - a.receivedAt.getTime());
       return messages.slice(0, maxResults);
     } catch (error) {
       throw enrichImapError(this.socketError ?? error);

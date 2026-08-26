@@ -13,17 +13,18 @@ const SUBJECT_KEYWORDS = [
   "verificação",
   "verificacao",
   "otp",
+  "welcome to uber",
 ];
 
 const FORWARD_PREFIXES = ["fwd:", "fw:", "enc:", "encaminhar:", "encaminhado:"];
 
 /**
  * Codigo perto de uma palavra-chave, ex: "codigo: 482913", "code is 482913",
- * "Seu código de verificação é 482913". A janela de ate 40 caracteres nao-
- * digitos acomoda frases naturais em portugues/ingles entre a palavra-chave
- * e o numero.
+ * "Verification code: 8606". Janela generosa: HTML da Uber (após strip)
+ * ainda pode deixar gap entre o label e o <p>NNNN</p>.
  */
-const CODE_NEAR_KEYWORD_PATTERN = /(?:c[oó]digo|code|otp|pin)\D{0,40}(\d[\d\s-]{2,9}\d)/i;
+const CODE_NEAR_KEYWORD_PATTERN =
+  /(?:verification\s*code|c[oó]digo(?:\s+de\s+verifica[cç][aã]o)?|code|otp|pin)\D{0,120}(\d[\d\s-]{2,9}\d)/i;
 /** Fallback generico: 4 a 8 digitos isolados. */
 const GENERIC_CODE_PATTERN = /\b(\d{4,8})\b/;
 
@@ -83,6 +84,17 @@ function senderMatches(from: string, expectedSender?: string): "exact" | "domain
   return "none";
 }
 
+function messageMentionsRecipient(message: GmailMessage, expectedRecipient: string): boolean {
+  const needle = expectedRecipient.trim().toLowerCase();
+  if (!needle) return false;
+  const text = `${message.subject}\n${message.bodyText ?? message.snippet}`.toLowerCase();
+  if (text.includes(needle)) return true;
+  for (const addr of message.toAddresses ?? []) {
+    if (addr === needle || addr.includes(needle)) return true;
+  }
+  return false;
+}
+
 function extractCode(text: string): { code: string; nearKeyword: boolean } | null {
   const nearKeywordMatch = text.match(CODE_NEAR_KEYWORD_PATTERN);
   if (nearKeywordMatch) {
@@ -124,8 +136,12 @@ export function extractVerificationCode(
   const candidates: Array<CodeCandidate & { receivedAt: Date; score: number }> = [];
 
   for (const message of messages) {
-    if (message.receivedAt.getTime() < criteria.requestedAt.getTime()) {
-      continue; // mensagem antiga, anterior a solicitacao do codigo
+    // Tolerância de 5 min antes do requestedAt: a Uber pode enviar o OTP
+    // antes do resend ser disparado e o "novo" e-mail pós-resend pode não
+    // conter código (ex: "Welcome to Uber" sem OTP).
+    const AGE_TOLERANCE_MS = 5 * 60_000;
+    if (message.receivedAt.getTime() < criteria.requestedAt.getTime() - AGE_TOLERANCE_MS) {
+      continue;
     }
 
     if (isForwarded(message.subject)) {
@@ -135,6 +151,12 @@ export function extractVerificationCode(
     const hasSubjectMatch = subjectMatchesKeywords(message.subject);
     const senderMatch = senderMatches(message.from, criteria.expectedSender);
 
+    // Com remetente esperado (Uber), exige domínio Uber — assunto genérico
+    // ("confirmation", "verify") sozinho pega marketing de outros serviços.
+    if (criteria.expectedSender && senderMatch === "none") {
+      continue;
+    }
+
     if (!hasSubjectMatch && senderMatch === "none") {
       continue; // nada indica que essa mensagem seja sobre o cadastro atual
     }
@@ -142,19 +164,28 @@ export function extractVerificationCode(
     const text = `${message.subject}\n${message.bodyText ?? message.snippet}`;
     const extracted = extractCode(text);
     if (!extracted) continue;
+    // Catch-all: só aceita código explícito (perto de "code"/"otp") — ignora
+    // números soltos em promoções, telefones, datas em outros e-mails.
+    if (criteria.expectedRecipient && !extracted.nearKeyword) {
+      continue;
+    }
     if (usedCodes.has(extracted.code)) continue;
+
+    const recipientMatch =
+      !!criteria.expectedRecipient &&
+      messageMentionsRecipient(message, criteria.expectedRecipient);
+    // Catch-all com vários OTPs na mesma caixa: sem match de destinatário
+    // ignora — evita digitar código de outro alias (MEDIUM falso positivo).
+    if (criteria.expectedRecipient && !recipientMatch) {
+      continue;
+    }
 
     let score = 0;
     if (senderMatch === "exact") score += 4;
     else if (senderMatch === "domain") score += 2;
     if (hasSubjectMatch) score += 2;
     if (extracted.nearKeyword) score += 1;
-    if (
-      criteria.expectedRecipient &&
-      text.toLowerCase().includes(criteria.expectedRecipient.trim().toLowerCase())
-    ) {
-      score += 5;
-    }
+    if (recipientMatch) score += 5;
 
     let confidence: CodeConfidence;
     if (score >= 6) confidence = "HIGH";

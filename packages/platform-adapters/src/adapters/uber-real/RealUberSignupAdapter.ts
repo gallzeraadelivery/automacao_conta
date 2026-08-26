@@ -46,7 +46,8 @@ export interface RealUberSignupAdapterOptions {
  *
  * Se `uberAccountCreated` (audit) ou cookies já abrem o hub: **nunca** refaz
  * signup (identifier/IMAP) — isso pede SMS no telefone placeholder e queima
- * a sessão. Só retoma hub / Driver requirements.
+ * a sessão. Só retoma hub / Driver requirements até sondar **Socure ou Veriff**
+ * (`probeVerificationProvidersStep` → pausa humana).
  */
 export class RealUberSignupAdapter extends PlatformAdapter {
   private readonly emailWorker: IEmailVerificationWorker;
@@ -166,7 +167,8 @@ export class RealUberSignupAdapter extends PlatformAdapter {
       action: "uber_real_signup_earn_setup_required",
       metadata: { reason: "documents_list_empty_or_missing" },
     });
-    // Ordem manual: uber.com Earn → cidade → Delivery with car → background → hub.
+    // Ordem: Earn → (gênero se aparecer) → cidade → Delivery → background → hub.
+    // confirmEarningLocation já trata gênero inline quando o Earn cai nele.
     await confirmEarningLocationStep(ctx);
     await selectGenderStep(ctx);
     await finishEarnThenGoToHubOnBackground(ctx);

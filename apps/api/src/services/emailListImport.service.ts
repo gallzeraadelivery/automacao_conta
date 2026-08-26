@@ -6,6 +6,7 @@ import {
   type ImportRowError,
 } from "@uber-automation/shared";
 import { createCredentialVault } from "../lib/credentialVault";
+import { findReservedEmails, recordUsedEmails } from "./usedEmails.service";
 
 export interface EmailListInvalidRow {
   row: number;
@@ -44,6 +45,7 @@ async function checkEmailListImport(companyId: string, text: string): Promise<Em
           or(inArray(applicants.externalId, externalIds), inArray(applicants.email, emails)),
         ),
       );
+    const reserved = await findReservedEmails(companyId, emails);
 
     const existingExternalIds = new Set(existing.map((a) => a.externalId));
     const existingEmails = new Set(existing.map((a) => a.email.toLowerCase()));
@@ -53,8 +55,12 @@ async function checkEmailListImport(companyId: string, text: string): Promise<Em
       if (existingExternalIds.has(data.externalId)) {
         errors.push({ row, field: "email", message: "Já existe um motorista com este e-mail" });
       }
-      if (existingEmails.has(data.email)) {
-        errors.push({ row, field: "email", message: "Já existe um motorista com este e-mail" });
+      if (existingEmails.has(data.email) || reserved.has(data.email)) {
+        errors.push({
+          row,
+          field: "email",
+          message: "Este e-mail já foi usado e não pode ser reimportado",
+        });
       }
 
       if (errors.length > 0) {
@@ -144,6 +150,7 @@ export async function importEmailList(
       encryptionAuthTag: sealed.authTag,
       provider,
     });
+    await recordUsedEmails(companyId, [data.email], "import");
 
     imported += 1;
   }

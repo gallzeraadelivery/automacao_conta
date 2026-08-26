@@ -180,7 +180,7 @@ describe("processAutomationJob", () => {
     expect(actions).not.toContain("automation_job_paused");
   });
 
-  it("marks PHONE_PROBLEM as FAILED (not pending) so the queue continues", async () => {
+  it("converts legacy PHONE_PROBLEM into PHONE_SMS_RETRY (does not fail the account)", async () => {
     const markFailed = vi.fn();
     const markAwaitingHumanAction = vi.fn();
     const deps = {
@@ -200,10 +200,13 @@ describe("processAutomationJob", () => {
     };
     const job = new FakeJob(baseJobData({ currentStep: "RUN_ADMINISTRATIVE_FLOW" }));
 
-    await expect(processAutomationJob(job, deps)).rejects.toThrow(NonRetryableAutomationError);
+    await expect(processAutomationJob(job, deps)).rejects.toMatchObject({
+      name: "TechnicalAutomationError",
+      reason: "PHONE_SMS_RETRY",
+    });
 
-    expect(job.discarded).toBe(true);
-    expect(markFailed).toHaveBeenCalledWith("applicant-1", "PHONE_PROBLEM");
+    expect(job.discarded).toBe(false);
+    expect(markFailed).not.toHaveBeenCalled();
     expect(markAwaitingHumanAction).not.toHaveBeenCalled();
     const actions = deps.sink.mock.calls.map((c) => c[0].action);
     expect(actions).toContain("automation_job_phone_problem");
@@ -246,22 +249,24 @@ describe("processAutomationJob", () => {
     expect(actions).toContain("automation_job_attempt_failed");
   });
 
-  it("marks the applicant FAILED once technical retries are exhausted", async () => {
+  it("marks the applicant READY once technical retries are exhausted", async () => {
     const emailVerificationWorker: IEmailVerificationWorker = {
       findVerificationCode: vi.fn().mockRejectedValue(new TechnicalAutomationError("PAGE_UNAVAILABLE")),
       handleSecurityChallenge: vi.fn(),
     };
+    const markStopped = vi.fn();
     const markFailed = vi.fn();
     const deps = buildDeps({
       emailVerificationWorker,
-      applicantStatusRepository: { markAwaitingHumanAction: vi.fn(), markFailed },
+      applicantStatusRepository: { markAwaitingHumanAction: vi.fn(), markStopped, markFailed },
     });
     const job = new FakeJob(baseJobData());
     job.attemptsMade = 2; // 3a e ultima tentativa (opts.attempts = 3)
 
     await expect(processAutomationJob(job, deps)).rejects.toThrow(TechnicalAutomationError);
 
-    expect(markFailed).toHaveBeenCalledWith("applicant-1", "PAGE_UNAVAILABLE");
+    expect(markStopped).toHaveBeenCalledWith("applicant-1");
+    expect(markFailed).not.toHaveBeenCalled();
     const actions = deps.sink.mock.calls.map((c) => c[0].action);
     expect(actions).toContain("automation_job_failed_final");
   });

@@ -39,3 +39,6 @@ packages/database/drizzle/meta/
 
 # misc
 *.tsbuildinfo
+
+# pnpm local store (nunca versionar)
+.pnpm-store/

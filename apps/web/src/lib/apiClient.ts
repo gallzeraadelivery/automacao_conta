@@ -84,11 +84,21 @@ export async function apiRequest<T>(
  * isto busca via fetch e aciona o download no navegador com um link
  * temporário. Retorna `false` se a resposta não for OK (ex: sessão expirada).
  */
-export async function apiDownload(path: string, filename: string): Promise<boolean> {
+export async function apiDownload(
+  path: string,
+  filename: string,
+  options: { method?: string; body?: unknown } = {},
+): Promise<boolean> {
   async function doFetch(): Promise<Response> {
     const headers = new Headers();
     if (accessToken) headers.set("Authorization", `Bearer ${accessToken}`);
-    return fetch(`${API_URL}${path}`, { headers, credentials: "include" });
+    if (options.body !== undefined) headers.set("Content-Type", "application/json");
+    return fetch(`${API_URL}${path}`, {
+      method: options.method ?? "GET",
+      headers,
+      credentials: "include",
+      body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
+    });
   }
 
   let response = await doFetch();

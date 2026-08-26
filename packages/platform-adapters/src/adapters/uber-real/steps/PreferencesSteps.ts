@@ -2,10 +2,10 @@ import { toTechnicalError } from "../../errorMapping";
 import { AutomationPauseSignal, AutomationTechnicalError } from "../../../types";
 import type { RealStepContext } from "../realStepContext";
 import type { Page } from "playwright";
-import { looksLikeAuthGate, softGoto } from "./HubSessionSteps";
+import { earnCityUi, looksLikeAuthGate, looksLikeBonjourChrome, looksLikeUberHub, softGoto } from "./HubSessionSteps";
 
-/** Mesmo padrão de AccountCreationSteps - "Next →" / Continue / Continuar. */
-const PRIMARY_NEXT_NAME = /^(continuar|continue|next|pr[oó]ximo)(\s*→)?$/i;
+/** Mesmo padrão de AccountCreationSteps + CTA "Join now" da tela Earn. */
+const PRIMARY_NEXT_NAME = /^(continuar|continue|next|pr[oó]ximo|join now)(\s*→)?$/i;
 
 /**
  * Banner "We use cookies" (Accept / Reject / Cookie settings) - bloqueia
@@ -42,6 +42,15 @@ export async function looksLikeBackgroundOrSocialScreen(page: Page): Promise<boo
   return ui.first().isVisible({ timeout: 2_500 }).catch(() => false);
 }
 
+async function looksLikeGenderScreen(page: Page): Promise<boolean> {
+  return page
+    .getByRole("heading", { name: /gender|g[eê]nero|what'?s your gender/i })
+    .or(page.getByText(/what'?s your gender|sharing your gender identity/i))
+    .first()
+    .isVisible({ timeout: 2_000 })
+    .catch(() => false);
+}
+
 async function looksLikeServiceTypeScreen(page: Page, serviceTypeLabel: string): Promise<boolean> {
   return page
     .getByText(new RegExp(`^${serviceTypeLabel}$`, "i"))
@@ -53,7 +62,7 @@ async function looksLikeServiceTypeScreen(page: Page, serviceTypeLabel: string):
 
 /** Opções de gênero aceitas (placeholder — nunca dado real). */
 const GENDER_OPTION_RE =
-  /prefer to choose later|i'?ll choose later|choose later|prefer not to say|decidir depois|prefiro (n[aã]o dizer|escolher depois)|non-?binary|man|male|homem/i;
+  /prefer to choose later|i'?ll choose later|choose later|choose not to answer|prefer not to say|none of the above|decidir depois|prefiro (n[aã]o dizer|escolher depois)|non-?binary|man|male|homem/i;
 
 /**
  * Passo 9: "What's your gender?" — usa "Prefer to choose later" (ou
@@ -72,18 +81,11 @@ export async function selectGenderStep(ctx: RealStepContext): Promise<void> {
 
     if (!genderVisible) {
       const skippedToEarnOrHub =
-        (await page
-          .getByRole("heading", { name: /earn with uber/i })
-          .or(page.getByText(/where would you like to earn/i))
-          .first()
-          .isVisible({ timeout: 5_000 })
-          .catch(() => false)) ||
+        (await earnCityUi(page).first().isVisible({ timeout: 5_000 }).catch(() => false)) ||
         /bonjour\.uber\.com/i.test(page.url());
 
       if (skippedToEarnOrHub) {
-        const onEarn = await page
-          .getByRole("heading", { name: /earn with uber/i })
-          .or(page.getByText(/where would you like to earn/i))
+        const onEarn = await earnCityUi(page)
           .first()
           .isVisible({ timeout: 1_500 })
           .catch(() => false);
@@ -103,9 +105,11 @@ export async function selectGenderStep(ctx: RealStepContext): Promise<void> {
       return;
     }
 
-    // Preferência: "escolher depois"; fallback no label da config / Man.
+    // Preferência: "escolher depois" / "Choose not to answer"; fallback Man.
     const preferLater = page
-      .getByText(/prefer to choose later|i'?ll choose later|choose later|prefer not to say|decidir depois|prefiro (n[aã]o dizer|escolher depois)/i)
+      .getByText(
+        /prefer to choose later|i'?ll choose later|choose later|choose not to answer|prefer not to say|none of the above|decidir depois|prefiro (n[aã]o dizer|escolher depois)/i,
+      )
       .first();
     const configured = page
       .getByText(new RegExp(`^${config.genderOptionLabel}$`, "i"))
@@ -356,28 +360,252 @@ async function advanceWelcomeBackInterstitialsIfPresent(
 }
 
 /**
+ * Fluxo validado (pós-conta / Documents vazio):
+ * start-riding (ou uber.com) → Menu → Earn → Deliver → "Earn with Uber" / cidade.
+ *
+ * NÃO clica /a/signup nem CTAs de login frio.
+ */
+async function openEarnCityViaMarketingNav(ctx: RealStepContext): Promise<boolean> {
+  const { page, config } = ctx;
+  const navTimeout = Math.max(config.timeouts.pageLoad, 45_000);
+  const earnHeading = earnCityUi(page);
+
+  async function cityVisible(timeoutMs: number): Promise<boolean> {
+    return earnHeading.first().isVisible({ timeout: timeoutMs }).catch(() => false);
+  }
+
+  async function serviceVisible(): Promise<boolean> {
+    return looksLikeServiceTypeScreen(page, config.serviceTypeLabel);
+  }
+
+  async function onboardingPastCity(): Promise<boolean> {
+    // Só serviço/cidade — gênero é tratado no caller (inline) antes da cidade.
+    if (await serviceVisible()) return true;
+    return false;
+  }
+
+  async function openMobileNavIfNeeded(): Promise<boolean> {
+    const menuToggle = page
+      .getByRole("button", { name: /^(menu|open navigation|abrir menu)$/i })
+      .or(page.locator('button[aria-label="Menu"], button[aria-label*="menu" i]'))
+      .first();
+    if (!(await menuToggle.isVisible({ timeout: 2_500 }).catch(() => false))) {
+      return false;
+    }
+    await ctx.human.clickSafe(menuToggle, { timeout: config.timeouts.elementWait });
+    await ctx.human.pause(500, 1_200);
+    await dismissCookieBannerIfPresent(page, config.timeouts.elementWait);
+    await ctx.recordStep("EARNING_LOCATION_MOBILE_MENU_OPENED", { url: page.url() });
+    return true;
+  }
+
+  /** Earn → Deliver (submenu). Clica Earn mesmo com href ruim; prioriza Deliver em seguida. */
+  async function clickEarnThenDeliver(): Promise<boolean> {
+    await openMobileNavIfNeeded();
+
+    const earnCandidates = page
+      .locator("header, [role='banner'], nav, [role='dialog'], [data-baseweb='drawer'], [data-baseweb='modal']")
+      .getByRole("button", { name: /^earn$/i })
+      .or(
+        page
+          .locator("header, [role='banner'], nav, [role='dialog'], [data-baseweb='drawer']")
+          .getByRole("link", { name: /^earn$/i }),
+      )
+      .or(page.getByRole("menuitem", { name: /^earn$/i }))
+      .or(page.getByRole("button", { name: /^earn$/i }))
+      .or(page.getByRole("link", { name: /^earn$/i }));
+
+    let earnClicked = false;
+    const n = await earnCandidates.count().catch(() => 0);
+    for (let i = 0; i < Math.min(n, 10); i++) {
+      const el = earnCandidates.nth(i);
+      if (!(await el.isVisible({ timeout: 400 }).catch(() => false))) continue;
+      const href = ((await el.getAttribute("href").catch(() => null)) || "").trim();
+      await ctx.human.clickSafe(el, {
+        timeout: config.timeouts.elementWait,
+        noWaitAfter: true,
+      });
+      await ctx.human.pause(500, 1_000);
+      await ctx.recordStep("EARNING_LOCATION_EARN_NAV_CLICKED", {
+        url: page.url(),
+        href: href || null,
+      });
+      earnClicked = true;
+      break;
+    }
+
+    if (!earnClicked) {
+      const earnText = page
+        .locator("header, [role='banner'], nav, [role='dialog'], [data-baseweb='drawer']")
+        .getByText(/^earn$/i)
+        .first();
+      if (await earnText.isVisible({ timeout: 1_500 }).catch(() => false)) {
+        await earnText.click({ timeout: config.timeouts.elementWait, noWaitAfter: true }).catch(() => undefined);
+        await ctx.human.pause(500, 1_000);
+        await ctx.recordStep("EARNING_LOCATION_EARN_NAV_CLICKED", { url: page.url(), via: "text" });
+        earnClicked = true;
+      }
+    }
+
+    if (!earnClicked) {
+      await ctx.recordStep("EARNING_LOCATION_EARN_NAV_MISSING", { url: page.url() });
+    }
+
+    // Submenu Deliver — caminho clássico após Earn.
+    if (await clickDeliverIfPresent()) return true;
+
+    // Se Earn navegou para destino errado, volta e tenta Deliver no menu.
+    if (/drivers\.uber\.com|ubereats\.com/i.test(page.url())) {
+      await ctx.recordStep("EARNING_LOCATION_EARN_NAV_WRONG_TARGET", { url: page.url() });
+      await softGoto(page, config.marketingBaseUrl, navTimeout);
+      await dismissCookieBannerIfPresent(page, config.timeouts.elementWait);
+      await openMobileNavIfNeeded();
+      if (await clickDeliverIfPresent()) return true;
+    }
+
+    return earnClicked;
+  }
+
+  async function clickDeliverIfPresent(): Promise<boolean> {
+    const deliver = page
+      .getByRole("menuitem", { name: /^deliver(y)?$/i })
+      .or(page.getByRole("link", { name: /^deliver(y)?$|deliver with uber/i }))
+      .or(page.getByRole("button", { name: /^deliver(y)?$|deliver with uber/i }))
+      .or(
+        page
+          .locator('a[href*="/deliver"]')
+          .filter({ hasNotText: /drive with uber|^drive$/i }),
+      );
+
+    const n = await deliver.count().catch(() => 0);
+    for (let i = 0; i < Math.min(n, 8); i++) {
+      const el = deliver.nth(i);
+      if (!(await el.isVisible({ timeout: 500 }).catch(() => false))) continue;
+      const href = (await el.getAttribute("href").catch(() => null)) ?? "";
+      if (/\/a\/signup|auth\.uber\.com|ubereats\.com/i.test(href)) continue;
+
+      // Preferir navegação explícita ao /deliver/ (click SPA às vezes não sai do start-riding).
+      const absolute =
+        href.startsWith("http")
+          ? href
+          : href.startsWith("/")
+            ? `https://www.uber.com${href}`
+            : "";
+      if (absolute && /\/deliver/i.test(absolute)) {
+        await softGoto(page, absolute.split("?")[0]!, navTimeout);
+      } else {
+        await ctx.human.clickSafe(el, {
+          timeout: config.timeouts.elementWait,
+          noWaitAfter: true,
+        });
+        await page
+          .waitForLoadState("domcontentloaded", { timeout: Math.min(config.timeouts.pageLoad, 30_000) })
+          .catch(() => undefined);
+        await ctx.human.pause(700, 1_600);
+      }
+
+      await ctx.recordStep("EARNING_LOCATION_DELIVERY_CLICKED", { url: page.url(), href });
+      await dismissCookieBannerIfPresent(page, config.timeouts.elementWait);
+      await dismissEarnEducationInterstitialIfPresent(page, config.timeouts.elementWait);
+      return true;
+    }
+    return false;
+  }
+
+  const alreadyOnUberMarketing =
+    /uber\.com/i.test(page.url()) &&
+    !/drivers\.uber\.com|bonjour\.uber\.com|auth\.uber\.com|ubereats\.com/i.test(page.url());
+
+  if (!alreadyOnUberMarketing) {
+    await softGoto(page, config.marketingBaseUrl, navTimeout);
+  }
+  await dismissCookieBannerIfPresent(page, config.timeouts.elementWait);
+  await dismissUberSorryErrorIfPresent(page, config.timeouts.elementWait);
+  await discardIfUberFatalBurnPage(page, ctx);
+  await dismissEarnEducationInterstitialIfPresent(page, config.timeouts.elementWait);
+
+  if (await looksLikeAuthGate(page)) {
+    await ctx.recordStep("EARNING_LOCATION_MARKETING_AUTH_GATE", { url: page.url() });
+    return false;
+  }
+  if (await cityVisible(3_000)) return true;
+  if (await onboardingPastCity()) return true;
+
+  // Fluxo clássico: Earn → Deliver → cidade (ou gênero/step no bonjour).
+  await clickEarnThenDeliver();
+  await dismissEarnEducationInterstitialIfPresent(page, config.timeouts.elementWait);
+  // Após Earn→drivers a Uber pode montar gênero depois cidade.
+  const afterEarnDeadline = Date.now() + 35_000;
+  while (Date.now() < afterEarnDeadline) {
+    if (await cityVisible(800)) return true;
+    if (await looksLikeGenderScreen(page)) {
+      await ctx.recordStep("EARNING_LOCATION_GENDER_INLINE", { url: page.url(), via: "earn_then_deliver" });
+      await selectGenderStep(ctx);
+      continue;
+    }
+    if (await onboardingPastCity()) {
+      await ctx.recordStep("EARNING_LOCATION_ONBOARDING_REACHED", {
+        url: page.url(),
+        via: "earn_then_deliver",
+      });
+      return true;
+    }
+    await page.waitForTimeout(700);
+  }
+
+  // Fallback: start-earning (Welcome back / Complete next steps).
+  try {
+    await softGoto(page, config.startEarningUrl, navTimeout);
+  } catch (error) {
+    await ctx.recordStep("EARNING_LOCATION_START_EARNING_GOTO_FAILED", {
+      url: page.url(),
+      error: error instanceof Error ? error.message.slice(0, 180) : String(error).slice(0, 180),
+    });
+    return (await cityVisible(3_000)) || (await onboardingPastCity());
+  }
+  await dismissCookieBannerIfPresent(page, config.timeouts.elementWait);
+  await dismissUberSorryErrorIfPresent(page, config.timeouts.elementWait);
+  const welcome = await advanceWelcomeBackInterstitialsIfPresent(
+    page,
+    config.timeouts.elementWait,
+  );
+  if (welcome.clickedWelcomeCta || welcome.dismissedEducation) {
+    await ctx.recordStep("WELCOME_BACK_ADVANCED", {
+      url: page.url(),
+      via: "marketing_nav_start_earning",
+      ...welcome,
+    });
+  }
+  if (await cityVisible(20_000)) {
+    await ctx.recordStep("EARNING_LOCATION_DEEP_LINK", {
+      url: page.url(),
+      via: config.startEarningUrl,
+    });
+    return true;
+  }
+  if (await onboardingPastCity()) return true;
+
+  return cityVisible(3_000);
+}
+
+/**
  * Passo 10: "Earn with Uber" / "Where would you like to earn?".
  * Escolhe a próxima cidade do rodízio (não fica na pré-preenchida do IP).
  * Dispensa cookies e clica Next.
  *
- * Se a UI de cidade não aparecer após esperar (e um goto em drivers):
- * pausa + salva cookies — NÃO volta ao marketing nem CTA /a/signup.
+ * Se a UI de cidade não aparecer: drivers → start-earning → Earn no marketing
+ * (Ride/start-riding). Só então pausa + cookies (sem /a/signup).
  */
 export async function confirmEarningLocationStep(ctx: RealStepContext): Promise<void> {
   const { page, config } = ctx;
   const navTimeout = Math.max(config.timeouts.pageLoad, 45_000);
 
-  // Só heading/copy da tela Earn — NÃO usar input/city genérico (bate em
+  // Só heading/copy da tela Earn/cidade — NÃO usar input/city genérico (bate em
   // My Profile → Language / Address e deixa Next forever disabled).
-  const earnCityUi = () =>
-    page
-      .getByRole("heading", { name: /earn with uber/i })
-      .or(page.getByText(/where would you like to earn/i));
-
   async function waitForCityUi(timeoutMs: number): Promise<boolean> {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
-      if (await earnCityUi().first().isVisible({ timeout: 600 }).catch(() => false)) {
+      if (await earnCityUi(page).first().isVisible({ timeout: 600 }).catch(() => false)) {
         return true;
       }
       await page.waitForTimeout(700);
@@ -386,20 +614,33 @@ export async function confirmEarningLocationStep(ctx: RealStepContext): Promise<
   }
 
   async function selectEarnCity(city: string): Promise<void> {
-    // Escopo na tela Earn (nunca Language/Address do My Profile).
+    // Escopo na tela Earn/cidade (nunca Language/Address do My Profile).
     const earnScope = page
       .locator("section, form, main, [role='main'], div")
-      .filter({ has: page.getByText(/where would you like to earn/i) })
+      .filter({
+        has: page.getByText(
+          /where would you like to earn|choose your city|select city|referral code \(optional\)/i,
+        ),
+      })
       .first();
 
     const cityInput = earnScope
-      .locator("input:not([type='hidden']):not([type='checkbox']):not([type='radio'])")
+      .locator(
+        'input[placeholder*="city" i], input[aria-label*="city" i], input[name*="city" i], input[autocomplete="address-level2"]',
+      )
+      .or(earnScope.getByRole("combobox"))
+      .or(
+        earnScope.locator(
+          "input:not([type='hidden']):not([type='checkbox']):not([type='radio']):not([name*='referral' i])",
+        ),
+      )
       .first();
 
     await cityInput.waitFor({ state: "visible", timeout: config.timeouts.elementWait });
 
     // Uber autocomplete: digitar "Orlando, FL" inteiro → "No Results".
-    // Digitar só o núcleo ("Orlando" / "Orlan") → lista; clicar "Orlando, FL, USA".
+    // Digitar só o núcleo ("Orlando") → lista; clicar "Orlando, FL, USA".
+    // NÃO usar recorte ("Orlan"): spinner + "No Results" falso.
     const cityCore = city.split(",")[0]!.trim();
     const statePart = (city.split(",")[1] ?? "").trim(); // "FL"
     const coreEsc = cityCore.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -408,21 +649,12 @@ export async function confirmEarningLocationStep(ctx: RealStepContext): Promise<
     const preferredOptionRe = stateEsc
       ? new RegExp(`^${coreEsc},\\s*${stateEsc},\\s*USA$`, "i")
       : new RegExp(`^${coreEsc},\\s*[A-Z]{2},\\s*USA$`, "i");
-
-    async function clearAndType(query: string): Promise<void> {
-      await cityInput.click({ timeout: config.timeouts.elementWait });
-      await cityInput.fill("");
-      await ctx.human.pause(200, 450);
-      await ctx.human.type(cityInput, query, {
-        timeout: config.timeouts.elementWait,
-        delayMs: { min: 55, max: 140 },
-      });
-      await ctx.human.pause(800, 1_600);
-    }
+    const selectedValueRe = stateEsc
+      ? new RegExp(`^${coreEsc},\\s*${stateEsc}\\b`, "i")
+      : new RegExp(`^${coreEsc},\\s*[A-Z]{2}\\b`, "i");
 
     function optionLocators(queryCore: string) {
       const qEsc = queryCore.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      // Preferência: "Orlando, FL, USA" (cidade), não aeroporto/outlet.
       const preferred = page
         .getByRole("option", { name: preferredOptionRe })
         .or(
@@ -444,27 +676,110 @@ export async function confirmEarningLocationStep(ctx: RealStepContext): Promise<
       return { preferred, anyCityUsa, anyWithCore };
     }
 
-    const queries = [
-      cityCore,
-      cityCore.length > 5 ? cityCore.slice(0, Math.max(5, cityCore.length - 2)) : cityCore,
-    ].filter((q, i, arr) => q && arr.indexOf(q) === i);
-
-    let clicked = false;
-    for (const query of queries) {
-      await clearAndType(query);
-      const locs = optionLocators(cityCore);
-      for (const loc of [locs.preferred, locs.anyCityUsa, locs.anyWithCore]) {
-        const el = loc.first();
-        if (await el.isVisible({ timeout: 6_000 }).catch(() => false)) {
-          await ctx.human.clickSafe(el, { timeout: config.timeouts.elementWait });
-          clicked = true;
-          break;
-        }
-      }
-      if (clicked) break;
+    async function inputLooksSelected(): Promise<boolean> {
+      const value = (await cityInput.inputValue().catch(() => "")).trim();
+      return preferredOptionRe.test(value) || selectedValueRe.test(value);
     }
 
-    if (!clicked) {
+    // Já veio "Orlando, FL, USA" (IP/pré-fill) → não redigitar (quebra autocomplete).
+    if (await inputLooksSelected()) {
+      return;
+    }
+
+    async function peekOptions(queryCore: string): Promise<boolean> {
+      const locs = optionLocators(queryCore);
+      for (const loc of [locs.preferred, locs.anyCityUsa, locs.anyWithCore]) {
+        if (await loc.first().isVisible({ timeout: 250 }).catch(() => false)) return true;
+      }
+      return false;
+    }
+
+    async function clickVisibleOption(queryCore: string): Promise<boolean> {
+      const locs = optionLocators(queryCore);
+      for (const loc of [locs.preferred, locs.anyCityUsa, locs.anyWithCore]) {
+        const el = loc.first();
+        if (await el.isVisible({ timeout: 800 }).catch(() => false)) {
+          await ctx.human.clickSafe(el, { timeout: config.timeouts.elementWait });
+          return true;
+        }
+      }
+      return false;
+    }
+
+    async function waitForAutocompleteReady(
+      queryCore: string,
+      timeoutMs: number,
+    ): Promise<"options" | "empty" | "idle"> {
+      const spinner = earnScope.locator(
+        '[data-baseweb="spinner"], [aria-busy="true"], [class*="spinner" i], [class*="Spinner"], svg[role="status"], svg[aria-label*="load" i]',
+      );
+      const noResults = earnScope.getByText(/^no results$/i).or(page.getByText(/^no results$/i));
+      const deadline = Date.now() + timeoutMs;
+      let sawSpinner = false;
+
+      while (Date.now() < deadline) {
+        if (await peekOptions(queryCore)) return "options";
+        const spinning = await spinner.first().isVisible({ timeout: 200 }).catch(() => false);
+        if (spinning) {
+          sawSpinner = true;
+          await page.waitForTimeout(300);
+          continue;
+        }
+        if (sawSpinner) {
+          await page.waitForTimeout(400);
+          if (await peekOptions(queryCore)) return "options";
+          if (await noResults.first().isVisible({ timeout: 400 }).catch(() => false)) return "empty";
+          return "idle";
+        }
+        await page.waitForTimeout(300);
+      }
+      if (await peekOptions(queryCore)) return "options";
+      if (await noResults.first().isVisible({ timeout: 300 }).catch(() => false)) return "empty";
+      return "idle";
+    }
+
+    async function tryKeyboardSelect(): Promise<boolean> {
+      const listbox = page.locator('[role="listbox"]').first();
+      if (!(await listbox.isVisible({ timeout: 800 }).catch(() => false))) return false;
+      await cityInput.press("ArrowDown").catch(() => undefined);
+      await ctx.human.pause(180, 350);
+      await cityInput.press("Enter").catch(() => undefined);
+      await ctx.human.pause(400, 800);
+      return inputLooksSelected();
+    }
+
+    async function clearAndType(query: string): Promise<void> {
+      await cityInput.click({ timeout: config.timeouts.elementWait });
+      await cityInput.fill("");
+      await ctx.human.pause(200, 450);
+      await ctx.human.type(cityInput, query, {
+        timeout: config.timeouts.elementWait,
+        delayMs: { min: 70, max: 160 },
+      });
+      await ctx.human.pause(350, 700);
+    }
+
+    if (await inputLooksSelected()) {
+      return;
+    }
+
+    let selected = false;
+    for (let attempt = 0; attempt < 3 && !selected; attempt += 1) {
+      await clearAndType(cityCore);
+      const ready = await waitForAutocompleteReady(cityCore, 12_000);
+      if (ready === "options") {
+        selected = await clickVisibleOption(cityCore);
+      }
+      if (!selected) {
+        selected = await tryKeyboardSelect();
+      }
+      if (!selected) {
+        await ctx.human.pause(600, 1_100);
+        selected = await inputLooksSelected();
+      }
+    }
+
+    if (!selected) {
       throw new AutomationTechnicalError(
         "ELEMENT_NOT_FOUND",
         `Autocomplete de cidade não listou opção para "${city}" (tente digitando o nome e clicando na sugestão USA)`,
@@ -472,8 +787,6 @@ export async function confirmEarningLocationStep(ctx: RealStepContext): Promise<
     }
 
     await ctx.human.pause(400, 1_000);
-
-    // Confirma que a sugestão fechou / valor ficou selecionado.
     await page
       .locator('[role="listbox"]')
       .first()
@@ -497,7 +810,7 @@ export async function confirmEarningLocationStep(ctx: RealStepContext): Promise<
       const afterWelcomeDeadline = Date.now() + 20_000;
       while (Date.now() < afterWelcomeDeadline) {
         if (await looksLikeServiceTypeScreen(page, config.serviceTypeLabel)) break;
-        if (await earnCityUi().first().isVisible({ timeout: 500 }).catch(() => false)) break;
+        if (await earnCityUi(page).first().isVisible({ timeout: 500 }).catch(() => false)) break;
         await page.waitForTimeout(700);
       }
     }
@@ -531,82 +844,145 @@ export async function confirmEarningLocationStep(ctx: RealStepContext): Promise<
       );
     }
 
-    // Pós-gênero a Uber costuma demorar no spinner antes da cidade.
-    let onEarn = await waitForCityUi(45_000);
+    // Pós-gênero / pós-hub: espera curta; depois fluxo clássico Earn→Deliver.
+    let onEarn = await waitForCityUi(12_000);
 
-    // Uma tentativa alinhada ao next_url do auth (drivers) — sem marketing
-    // nem CTA /a/signup (isso reinicia login frio e queima a sessão).
+    // Ride / start-riding → Earn → Deliver → cidade (fluxo que sempre deu certo).
     if (!onEarn) {
       await ctx.recordStep("EARNING_LOCATION_MISSING", { url: page.url() });
-      await softGoto(page, config.driversBaseUrl, navTimeout);
-      await dismissCookieBannerIfPresent(page, config.timeouts.elementWait);
-      await dismissUberSorryErrorIfPresent(page, config.timeouts.elementWait);
-      const welcomePass2 = await advanceWelcomeBackInterstitialsIfPresent(
-        page,
-        config.timeouts.elementWait,
-      );
-      if (welcomePass2.clickedWelcomeCta || welcomePass2.dismissedEducation) {
-        await ctx.recordStep("WELCOME_BACK_ADVANCED", {
-          url: page.url(),
-          via: "drivers",
-          ...welcomePass2,
-        });
-        const afterWelcomeDeadline = Date.now() + 15_000;
-        while (Date.now() < afterWelcomeDeadline) {
-          if (await looksLikeServiceTypeScreen(page, config.serviceTypeLabel)) break;
-          if (await earnCityUi().first().isVisible({ timeout: 500 }).catch(() => false)) break;
-          await page.waitForTimeout(700);
+      await ctx.recordStep("EARNING_LOCATION_MARKETING_NAV_ATTEMPT", {
+        url: page.url(),
+      });
+      try {
+        const viaMarketing = await openEarnCityViaMarketingNav(ctx);
+        if (await looksLikeGenderScreen(page)) {
+          await ctx.recordStep("EARNING_LOCATION_GENDER_INLINE", { url: page.url() });
+          await selectGenderStep(ctx);
+          onEarn = await waitForCityUi(25_000);
+          if (!onEarn && (await looksLikeServiceTypeScreen(page, config.serviceTypeLabel))) {
+            await ctx.recordStep("EARNING_LOCATION_CONFIRMED", {
+              skipped: true,
+              reason: "service_type_after_inline_gender",
+              city: ctx.assignedEarnCity ?? ctx.context.assignedEarnCity,
+            });
+            await ctx.persistSession?.({ markGolden: true, forceGolden: true });
+            return;
+          }
+        } else if (await looksLikeServiceTypeScreen(page, config.serviceTypeLabel)) {
+          await ctx.recordStep("EARNING_LOCATION_CONFIRMED", {
+            skipped: true,
+            reason: "service_type_after_marketing_earn",
+            city: ctx.assignedEarnCity ?? ctx.context.assignedEarnCity,
+          });
+          await ctx.persistSession?.({ markGolden: true, forceGolden: true });
+          return;
+        } else {
+          onEarn = viaMarketing || (await waitForCityUi(8_000));
         }
+      } catch (error) {
+        if (error instanceof AutomationPauseSignal) throw error;
+        await ctx.recordStep("EARNING_LOCATION_MARKETING_NAV_FAILED", {
+          url: page.url(),
+          error: error instanceof Error ? error.message.slice(0, 180) : String(error).slice(0, 180),
+        });
       }
+    }
+
+    // start-earning: Welcome back → Got It → cidade (rede pode falhar — não aborta).
+    if (!onEarn) {
+      try {
+        await softGoto(page, config.startEarningUrl, navTimeout);
+        await dismissCookieBannerIfPresent(page, config.timeouts.elementWait);
+        await dismissUberSorryErrorIfPresent(page, config.timeouts.elementWait);
+        const welcomePass3 = await advanceWelcomeBackInterstitialsIfPresent(
+          page,
+          config.timeouts.elementWait,
+        );
+        if (welcomePass3.clickedWelcomeCta || welcomePass3.dismissedEducation) {
+          await ctx.recordStep("WELCOME_BACK_ADVANCED", {
+            url: page.url(),
+            via: "start_earning",
+            ...welcomePass3,
+          });
+          const afterWelcomeDeadline = Date.now() + 15_000;
+          while (Date.now() < afterWelcomeDeadline) {
+            if (await looksLikeServiceTypeScreen(page, config.serviceTypeLabel)) break;
+            if (await earnCityUi(page).first().isVisible({ timeout: 500 }).catch(() => false)) break;
+            await page.waitForTimeout(700);
+          }
+        }
+        if (await looksLikeServiceTypeScreen(page, config.serviceTypeLabel)) {
+          await ctx.recordStep("EARNING_LOCATION_CONFIRMED", {
+            skipped: true,
+            reason: "service_type_after_start_earning_welcome",
+            city: ctx.assignedEarnCity ?? ctx.context.assignedEarnCity,
+          });
+          await ctx.persistSession?.({ markGolden: true, forceGolden: true });
+          return;
+        }
+        onEarn = await waitForCityUi(15_000);
+      } catch (error) {
+        if (error instanceof AutomationPauseSignal) throw error;
+        await ctx.recordStep("EARNING_LOCATION_START_EARNING_GOTO_FAILED", {
+          url: page.url(),
+          error: error instanceof Error ? error.message.slice(0, 180) : String(error).slice(0, 180),
+        });
+      }
+    }
+
+    // Fallback drivers (opcional).
+    if (!onEarn) {
+      try {
+        await softGoto(page, config.driversBaseUrl, navTimeout);
+        await dismissCookieBannerIfPresent(page, config.timeouts.elementWait);
+        await dismissUberSorryErrorIfPresent(page, config.timeouts.elementWait);
+        const welcomePass2 = await advanceWelcomeBackInterstitialsIfPresent(
+          page,
+          config.timeouts.elementWait,
+        );
+        if (welcomePass2.clickedWelcomeCta || welcomePass2.dismissedEducation) {
+          await ctx.recordStep("WELCOME_BACK_ADVANCED", {
+            url: page.url(),
+            via: "drivers",
+            ...welcomePass2,
+          });
+        }
+        if (await looksLikeServiceTypeScreen(page, config.serviceTypeLabel)) {
+          await ctx.recordStep("EARNING_LOCATION_CONFIRMED", {
+            skipped: true,
+            reason: "service_type_after_drivers_welcome",
+            city: ctx.assignedEarnCity ?? ctx.context.assignedEarnCity,
+          });
+          await ctx.persistSession?.({ markGolden: true, forceGolden: true });
+          return;
+        }
+        onEarn = await waitForCityUi(12_000);
+      } catch (error) {
+        if (error instanceof AutomationPauseSignal) throw error;
+        await ctx.recordStep("EARNING_LOCATION_DRIVERS_GOTO_FAILED", {
+          url: page.url(),
+          error: error instanceof Error ? error.message.slice(0, 180) : String(error).slice(0, 180),
+        });
+      }
+    }
+
+    // Ainda sem cidade: se ainda há gênero, resolve e espera cidade; senão pausa.
+    if (!onEarn) {
+      if (await looksLikeGenderScreen(page)) {
+        await selectGenderStep(ctx);
+        onEarn = await waitForCityUi(25_000);
+      }
+    }
+    if (!onEarn) {
       if (await looksLikeServiceTypeScreen(page, config.serviceTypeLabel)) {
         await ctx.recordStep("EARNING_LOCATION_CONFIRMED", {
           skipped: true,
-          reason: "service_type_after_drivers_welcome",
-          city: ctx.assignedEarnCity ?? ctx.context.assignedEarnCity,
+          reason: "service_type_without_city_heading",
+          url: page.url(),
         });
         await ctx.persistSession?.({ markGolden: true, forceGolden: true });
         return;
       }
-      onEarn = await waitForCityUi(20_000);
-    }
-
-    // start-earning: Welcome back → Got It → cidade ou Delivery.
-    if (!onEarn) {
-      await softGoto(page, config.startEarningUrl, navTimeout);
-      await dismissCookieBannerIfPresent(page, config.timeouts.elementWait);
-      await dismissUberSorryErrorIfPresent(page, config.timeouts.elementWait);
-      const welcomePass3 = await advanceWelcomeBackInterstitialsIfPresent(
-        page,
-        config.timeouts.elementWait,
-      );
-      if (welcomePass3.clickedWelcomeCta || welcomePass3.dismissedEducation) {
-        await ctx.recordStep("WELCOME_BACK_ADVANCED", {
-          url: page.url(),
-          via: "start_earning",
-          ...welcomePass3,
-        });
-        const afterWelcomeDeadline = Date.now() + 15_000;
-        while (Date.now() < afterWelcomeDeadline) {
-          if (await looksLikeServiceTypeScreen(page, config.serviceTypeLabel)) break;
-          if (await earnCityUi().first().isVisible({ timeout: 500 }).catch(() => false)) break;
-          await page.waitForTimeout(700);
-        }
-      }
-      if (await looksLikeServiceTypeScreen(page, config.serviceTypeLabel)) {
-        await ctx.recordStep("EARNING_LOCATION_CONFIRMED", {
-          skipped: true,
-          reason: "service_type_after_start_earning_welcome",
-          city: ctx.assignedEarnCity ?? ctx.context.assignedEarnCity,
-        });
-        await ctx.persistSession?.({ markGolden: true, forceGolden: true });
-        return;
-      }
-      onEarn = await waitForCityUi(20_000);
-    }
-
-    // Ainda sem cidade/hub: pausa humana + cookies. Não retentar nem voltar
-    // ao funnel de signup.
-    if (!onEarn) {
       await discardIfUberFatalBurnPage(page, ctx);
       await ctx.recordStep("POST_ACCOUNT_MANUAL_CONTINUE", {
         url: page.url(),
@@ -639,7 +1015,7 @@ export async function confirmEarningLocationStep(ctx: RealStepContext): Promise<
     await nextButton.waitFor({ state: "visible", timeout: config.timeouts.elementWait });
     await nextButton.scrollIntoViewIfNeeded().catch(() => undefined);
 
-    // Next só habilita depois de selecionar opção do autocomplete.
+    // Next / Join now só habilita depois de selecionar opção do autocomplete.
     const enabledDeadline = Date.now() + Math.max(config.timeouts.elementWait, 20_000);
     while (Date.now() < enabledDeadline) {
       if (await nextButton.isEnabled().catch(() => false)) break;
@@ -648,7 +1024,7 @@ export async function confirmEarningLocationStep(ctx: RealStepContext): Promise<
     if (!(await nextButton.isEnabled().catch(() => false))) {
       throw new AutomationTechnicalError(
         "ELEMENT_TIMEOUT",
-        `Next da cidade ainda disabled após selecionar "${city}" — retentar`,
+        `Next/Join now da cidade ainda disabled após selecionar "${city}" — retentar`,
       );
     }
 
@@ -791,15 +1167,26 @@ export async function hasDriverDocumentEntries(page: Page, timeoutMs = 2_500): P
 
 async function openDocumentsTab(ctx: RealStepContext): Promise<void> {
   const { page, config } = ctx;
-  await softGoto(page, config.profileUrl, Math.max(config.timeouts.pageLoad, 45_000));
+  const chromeAlready = (await looksLikeBonjourChrome(page)) || (await looksLikeUberHub(page));
+  if (!chromeAlready) {
+    await softGoto(page, config.profileUrl, Math.max(config.timeouts.pageLoad, 45_000));
+  }
+
   const documentsTab = page.getByRole("tab", { name: /^documents$/i }).or(page.getByText(/^documents$/i));
+  const chromeDeadline = Date.now() + 15_000;
+  while (Date.now() < chromeDeadline) {
+    if ((await documentsTab.count().catch(() => 0)) > 0) break;
+    await page.waitForTimeout(400);
+  }
   if ((await documentsTab.count().catch(() => 0)) > 0) {
     await documentsTab.first().click({ timeout: config.timeouts.elementWait }).catch(() => undefined);
+    await ctx.human.pause(500, 1_000);
   }
   await page
-    .getByText(/driver requirements|documents|welcome/i)
+    .getByText(/driver requirements/i)
+    .or(page.getByRole("heading", { name: /welcome/i }))
     .first()
-    .waitFor({ state: "visible", timeout: config.timeouts.pageLoad })
+    .waitFor({ state: "visible", timeout: Math.max(config.timeouts.pageLoad, 25_000) })
     .catch(() => undefined);
 }
 
@@ -863,18 +1250,19 @@ export async function skipBackgroundCheckStep(ctx: RealStepContext): Promise<voi
   const timeout = Math.max(config.timeouts.pageLoad, 45_000);
 
   await softGoto(page, config.profileUrl, timeout);
+  await openDocumentsTab(ctx);
 
-  // Espera hub Documents / Welcome / Driver requirements.
   const hubUi = page
     .getByText(/driver requirements/i)
     .or(page.getByRole("tab", { name: /^documents$/i }))
     .or(page.getByRole("heading", { name: /welcome/i }))
     .or(page.getByText(/add my vehicle/i));
-  await hubUi.first().waitFor({ state: "visible", timeout: 45_000 }).catch(() => undefined);
+  await hubUi.first().waitFor({ state: "visible", timeout: 25_000 }).catch(() => undefined);
 
   await ctx.recordStep("BACKGROUND_CHECK_SKIPPED", {
     detectedBackgroundOrSsn: onBackground,
     url: page.url(),
+    documentsTab: (await page.getByRole("tab", { name: /^documents$/i }).count().catch(() => 0)) > 0,
   });
   await ctx.persistSession?.({ markGolden: true, forceGolden: true });
 }
