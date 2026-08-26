@@ -26,6 +26,12 @@ load_user_tools() {
 
 load_user_tools
 
+# Evita worker apontar para mock-server inexistente
+if [[ -f .env ]] && grep -q '^AUTOMATION_TARGET=mock' .env 2>/dev/null; then
+  echo "==> .env estava em mock — ajustando para AUTOMATION_TARGET=production"
+  sed -i '' 's/^AUTOMATION_TARGET=mock$/AUTOMATION_TARGET=production/' .env
+fi
+
 COMPOSE="docker compose -f infra/docker/docker-compose.yml"
 
 if ! command -v docker >/dev/null 2>&1; then

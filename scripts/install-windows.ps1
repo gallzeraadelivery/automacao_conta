@@ -138,7 +138,17 @@ if (-not (Test-Path ".env")) {
     -replace "replace-with-another-long-random-secret", $refresh `
     -replace "replace-with-64-hex-characters-32-byte-key", $cred |
     Set-Content ".env" -NoNewline
-  Write-Host "    Revise .env se precisar (proxies, IMAP, etc.)."
+}
+
+# Garante Uber real (evita mock-server inexistente no compose padrão)
+$envText = Get-Content ".env" -Raw
+if ($envText -match '(?m)^AUTOMATION_TARGET=mock\s*$') {
+  Write-Host "==> Ajustando AUTOMATION_TARGET=production no .env"
+  $envText = $envText -replace '(?m)^AUTOMATION_TARGET=mock\s*$', 'AUTOMATION_TARGET=production'
+  Set-Content -Path ".env" -Value $envText -NoNewline
+}
+if ($envText -notmatch '(?m)^AUTOMATION_TARGET=') {
+  Add-Content -Path ".env" -Value "`nAUTOMATION_TARGET=production"
 }
 
 if (-not (Test-Path ".secrets.key")) {

@@ -207,6 +207,15 @@ if [[ ! -f .env ]]; then
   fi
 fi
 
+# Garante Uber real (evita mock-server:3001 inexistente no compose padrão)
+if grep -q '^AUTOMATION_TARGET=mock' .env 2>/dev/null; then
+  echo "==> Ajustando AUTOMATION_TARGET=production no .env"
+  sed -i '' 's/^AUTOMATION_TARGET=mock$/AUTOMATION_TARGET=production/' .env
+fi
+if ! grep -q '^AUTOMATION_TARGET=' .env 2>/dev/null; then
+  echo 'AUTOMATION_TARGET=production' >> .env
+fi
+
 if [[ ! -f .secrets.key ]]; then
   echo "==> Gerando .secrets.key"
   openssl rand -hex 32 > .secrets.key
