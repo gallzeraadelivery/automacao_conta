@@ -45,10 +45,10 @@ Os instaladores fazem:
 
 ## Como abrir o painel (janela)
 
-| Sistema | Instalar (1ª vez) | Abrir painel |
-|---------|-------------------|--------------|
-| **Mac** | `INSTALAR-Mac.command` | `Iniciar-Mac.command` |
-| **Windows** | `INSTALAR-Windows.bat` | `Iniciar-Windows.bat` |
+| Sistema | Instalar (1ª vez) | Atualizar | Abrir painel |
+|---------|-------------------|-----------|--------------|
+| **Mac** | `INSTALAR-Mac.command` | `ATUALIZAR-Mac.command` | `Iniciar-Mac.command` |
+| **Windows** | `INSTALAR-Windows.bat` | `ATUALIZAR-Windows.bat` | `Iniciar-Windows.bat` |
 
 Ou no terminal:
 
