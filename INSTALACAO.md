@@ -101,7 +101,7 @@ Feche a janela do painel normalmente (Cmd+Q / Alt+F4).
 | “Docker não está rodando” | Abra o **Docker Desktop** e espere o status Running |
 | Janela diz “painel offline” | Espere o `web` subir: `docker compose -f infra/docker/docker-compose.yml logs -f web` |
 | Porta 3000/4000 ocupada | Pare outro serviço ou mude `WEB_PORT` / `API_PORT` no `.env` e rebuild o web |
-| Mac: `INSTALAR-Mac.command` / `Iniciar-Mac.command` não executa | No Terminal: `chmod +x INSTALAR-Mac.command Iniciar-Mac.command` |
+| Janela não abre no Mac (Iniciar) | O script agora carrega nvm sozinho. Se ainda falhar: `git pull` e rode `Iniciar-Mac.command` de novo; ou no Terminal: `source ~/.nvm/nvm.sh && ./scripts/start-mac.sh` |
 | Windows: script bloqueado | Clique em `INSTALAR-Windows.bat` (já usa Bypass); ou `Set-ExecutionPolicy -Scope Process Bypass` |
 
 ## Arquivos desta melhoria
