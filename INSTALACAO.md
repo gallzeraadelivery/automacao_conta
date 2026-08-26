@@ -9,13 +9,12 @@ Na prática: só clicar em **INSTALAR-…**. O script tenta instalar sozinho:
 
 | Item | Mac | Windows |
 |------|-----|---------|
-| Homebrew | Instala se faltar | — |
-| Docker Desktop | Instala via Homebrew + abre e espera | Instala via **winget** + abre e espera |
-| Node.js 20+ | Instala via Homebrew | Instala LTS via **winget** |
-| pnpm | Via corepack | Via corepack / npm |
+| Homebrew | Só se Docker ainda não existir (pede senha 1x) | — |
+| Docker Desktop | Instala + abre e espera (**pode pedir senha de admin**) | Instala via **winget** + abre e espera |
+| Node.js 20+ | **nvm no usuário (sem sudo)** | Instala LTS via **winget** |
+| pnpm | Via corepack/npm do usuário | Via corepack / npm |
 
-Baixe o Docker Desktop manualmente só se o instalador falhar:  
-https://www.docker.com/products/docker-desktop/
+**Mac — senha de administrador:** na 1ª instalação o sistema pede senha para colocar o **Docker Desktop**. Node/pnpm não precisam de sudo. Digite a senha do Mac e continue.
 
 **Windows:** na 1ª instalação do Docker pode pedir **WSL2** e/ou **reiniciar o PC** — depois rode `INSTALAR-Windows.bat` de novo.
 
