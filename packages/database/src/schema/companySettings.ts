@@ -1,4 +1,4 @@
-import { pgTable, uuid, varchar, timestamp } from "drizzle-orm/pg-core";
+import { pgTable, uuid, varchar, text, timestamp } from "drizzle-orm/pg-core";
 import { companies } from "./companies";
 
 /**
@@ -14,6 +14,17 @@ export const companySettings = pgTable("company_settings", {
   placeholderPhoneBase: varchar("placeholder_phone_base", { length: 10 }).notNull(),
   /** Cidade na tela Earn with Uber (ex.: "Orlando, FL"). */
   earnCity: varchar("earn_city", { length: 100 }).notNull(),
+  /** Domínio dos e-mails gerados no lote (ex.: mailsproton.com). */
+  signupEmailDomain: varchar("signup_email_domain", { length: 255 }),
+  /** Provider IMAP das contas importadas (gmail, spacemail, …). */
+  signupEmailProvider: varchar("signup_email_provider", { length: 50 }),
+  /** Caixa IMAP compartilhada onde cai o OTP (catch-all). */
+  catchallInboxEmail: varchar("catchall_inbox_email", { length: 255 }),
+  /**
+   * Domínios (CSV) cujo OTP é lido na caixa catch-all.
+   * Ex.: "mailsproton.com,mail2too.com"
+   */
+  catchallDomains: text("catchall_domains"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });

@@ -3,6 +3,7 @@ import type { AuditLogger } from "@uber-automation/security";
 import type { BrowserProfileManager } from "@uber-automation/automation";
 import { resolveProxyConnection } from "./proxyConnection";
 import { saveDebugScreenshot } from "./screenshotStorage";
+import { loadCatchallDomainMapForCompany } from "./companySettings";
 
 /**
  * `EmailVerificationWorker` só recebe `companyId` na construção (usado
@@ -21,6 +22,9 @@ export function createScopedEmailVerificationWorker(
   return new EmailVerificationWorker({
     auditLogger,
     companyId,
+    async catchallDomainMapResolver(cid) {
+      return loadCatchallDomainMapForCompany(cid);
+    },
     // Faltava isso: sem essa linha, o login no Gmail sempre acontecia sem
     // proxy nenhum, mesmo quando o motorista tinha um proxy configurado -
     // uma navegação direta do IP do servidor, diferente de toda a automação

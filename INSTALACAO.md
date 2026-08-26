@@ -5,51 +5,51 @@ A API, o worker e o banco continuam no **Docker**, do mesmo jeito que já funcio
 
 ## O que você precisa
 
+Na prática: só clicar em **INSTALAR-…**. O script tenta instalar sozinho:
+
 | Item | Mac | Windows |
 |------|-----|---------|
-| Docker Desktop | Sim | Sim |
-| Node.js 20+ | Sim (só para a janela do painel) | Sim |
-| pnpm | Instalado automaticamente pelos scripts | Idem |
+| Homebrew | Instala se faltar | — |
+| Docker Desktop | Instala via Homebrew + abre e espera | Instala via **winget** + abre e espera |
+| Node.js 20+ | Instala via Homebrew | Instala LTS via **winget** |
+| pnpm | Via corepack | Via corepack / npm |
 
-Baixe o Docker Desktop se ainda não tiver:  
+Baixe o Docker Desktop manualmente só se o instalador falhar:  
 https://www.docker.com/products/docker-desktop/
+
+**Windows:** na 1ª instalação do Docker pode pedir **WSL2** e/ou **reiniciar o PC** — depois rode `INSTALAR-Windows.bat` de novo.
 
 ## Instalação automática
 
 ### MacBook (macOS)
 
-No Terminal, na pasta do projeto:
+1. Clique duas vezes em **`INSTALAR-Mac.command`**  
+   (ou no Terminal: `./scripts/install-mac.sh`)
 
-```bash
-chmod +x scripts/install-mac.sh Iniciar-Mac.command scripts/start-mac.sh
-./scripts/install-mac.sh
-```
-
-O script:
-
-1. Verifica/ajuda a instalar Docker e Node  
-2. Cria `.env` e `.secrets.key` se faltarem  
-3. Roda `pnpm install`  
-4. Sobe o stack: `docker compose -f infra/docker/docker-compose.yml up -d --build`  
-5. Tenta migrate + seed do admin  
+2. Depois, para abrir o painel em janela: clique em **`Iniciar-Mac.command`**
 
 ### Windows
 
-No PowerShell, na pasta do projeto:
+1. Clique duas vezes em **`INSTALAR-Windows.bat`**  
+   (ou no PowerShell: `.\scripts\install-windows.ps1`)
 
-```powershell
-Set-ExecutionPolicy -Scope Process Bypass
-.\scripts\install-windows.ps1
-```
+2. Depois, para abrir o painel em janela: clique em **`Iniciar-Windows.bat`**
 
-Mesmos passos do Mac (Docker + `.env` + compose + seed).
+Os instaladores fazem:
+
+1. Instalam o que faltar (Homebrew/Docker/Node no Mac; Docker/Node via winget no Windows)  
+2. Esperam o Docker Desktop ficar Running  
+3. Criam `.env` e `.secrets.key` se faltarem  
+4. Rodam `pnpm install`  
+5. Sobe o stack: `docker compose -f infra/docker/docker-compose.yml up -d --build`  
+6. Tentam migrate + seed do admin  
 
 ## Como abrir o painel (janela)
 
-| Sistema | Inicializador |
-|---------|----------------|
-| **Mac** | Clique duas vezes em `Iniciar-Mac.command` |
-| **Windows** | Clique duas vezes em `Iniciar-Windows.bat` |
+| Sistema | Instalar (1ª vez) | Abrir painel |
+|---------|-------------------|--------------|
+| **Mac** | `INSTALAR-Mac.command` | `Iniciar-Mac.command` |
+| **Windows** | `INSTALAR-Windows.bat` | `Iniciar-Windows.bat` |
 
 Ou no terminal:
 
@@ -102,12 +102,13 @@ Feche a janela do painel normalmente (Cmd+Q / Alt+F4).
 | “Docker não está rodando” | Abra o **Docker Desktop** e espere o status Running |
 | Janela diz “painel offline” | Espere o `web` subir: `docker compose -f infra/docker/docker-compose.yml logs -f web` |
 | Porta 3000/4000 ocupada | Pare outro serviço ou mude `WEB_PORT` / `API_PORT` no `.env` e rebuild o web |
-| Mac: `Iniciar-Mac.command` não executa | No Terminal: `chmod +x Iniciar-Mac.command` |
-| Windows: script bloqueado | `Set-ExecutionPolicy -Scope Process Bypass` e rode de novo |
+| Mac: `INSTALAR-Mac.command` / `Iniciar-Mac.command` não executa | No Terminal: `chmod +x INSTALAR-Mac.command Iniciar-Mac.command` |
+| Windows: script bloqueado | Clique em `INSTALAR-Windows.bat` (já usa Bypass); ou `Set-ExecutionPolicy -Scope Process Bypass` |
 
 ## Arquivos desta melhoria
 
 - `apps/desktop-shell/` — app Electron (janela do painel)  
+- `INSTALAR-Mac.command` / `INSTALAR-Windows.bat` — instalação com clique duplo  
+- `Iniciar-Mac.command` / `Iniciar-Windows.bat` — abrir painel com clique duplo  
 - `scripts/install-mac.sh` / `scripts/install-windows.ps1` — instalação automática  
 - `scripts/start-mac.sh` / `scripts/start-windows.ps1` — sobe stack + abre janela  
-- `Iniciar-Mac.command` / `Iniciar-Windows.bat` — atalho de clique duplo  

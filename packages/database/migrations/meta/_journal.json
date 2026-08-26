@@ -43,6 +43,13 @@
       "when": 1787070000000,
       "tag": "0005_used_emails",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1787720000000,
+      "tag": "0006_email_catchall_settings",
+      "breakpoints": true
     }
   ]
 }

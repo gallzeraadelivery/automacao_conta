@@ -1,7 +1,6 @@
-# Instalação automática no Windows — stack Docker como hoje + deps do painel em janela.
-# Execute no PowerShell (como usuário normal; Docker Desktop já deve estar instalável):
-#   Set-ExecutionPolicy -Scope Process Bypass
-#   .\scripts\install-windows.ps1
+# Instalação automática no Windows.
+# Instala o que faltar (Docker Desktop, Node LTS via winget) e sobe o stack.
+# Preferir: clique duplo em INSTALAR-Windows.bat
 
 $ErrorActionPreference = "Stop"
 $Root = Resolve-Path (Join-Path $PSScriptRoot "..")
@@ -11,29 +10,95 @@ Write-Host "==> Uber Automation — instalação (Windows)"
 Write-Host "    Pasta: $Root"
 Write-Host ""
 
-function Test-Command($Name) {
+function Test-Command([string]$Name) {
   return [bool](Get-Command $Name -ErrorAction SilentlyContinue)
 }
 
+function Refresh-Path {
+  $env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" +
+    [System.Environment]::GetEnvironmentVariable("Path", "User")
+}
+
+function Install-WithWinget([string]$Id, [string]$Label) {
+  if (-not (Test-Command "winget")) {
+    Write-Host "ERRO: winget não encontrado. Atualize o Windows / App Installer e tente de novo."
+    Write-Host "Ou instale manualmente: $Label"
+    exit 1
+  }
+  Write-Host "==> Instalando $Label via winget ($Id)..."
+  winget install -e --id $Id --accept-package-agreements --accept-source-agreements --disable-interactivity
+  Refresh-Path
+}
+
+function Wait-DockerReady([int]$MaxAttempts = 90) {
+  for ($i = 1; $i -le $MaxAttempts; $i++) {
+    try {
+      docker info 2>$null | Out-Null
+      if ($LASTEXITCODE -eq 0) {
+        Write-Host "    Docker OK (${i} tentativas)"
+        return $true
+      }
+    } catch { }
+    Start-Sleep -Seconds 2
+  }
+  return $false
+}
+
+# --- Docker Desktop ---
+Refresh-Path
 if (-not (Test-Command "docker")) {
-  Write-Host "ERRO: Docker não encontrado."
-  Write-Host "Instale o Docker Desktop: https://www.docker.com/products/docker-desktop/"
-  Write-Host "Depois reinicie o PC e rode este script de novo."
-  exit 1
+  Install-WithWinget "Docker.DockerDesktop" "Docker Desktop"
+  Refresh-Path
+  if (-not (Test-Command "docker")) {
+    Write-Host ""
+    Write-Host "Docker Desktop foi instalado, mas o comando 'docker' ainda não está no PATH."
+    Write-Host "1) Abra o Docker Desktop pelo menu Iniciar"
+    Write-Host "2) Complete o setup (WSL2 se pedir) e REINICIE o PC se solicitado"
+    Write-Host "3) Rode de novo: INSTALAR-Windows.bat"
+    exit 1
+  }
 }
 
+# Sobe o Docker Desktop se o daemon estiver parado
 try {
-  docker info | Out-Null
+  docker info 2>$null | Out-Null
+  $dockerOk = ($LASTEXITCODE -eq 0)
 } catch {
-  Write-Host "Docker instalado, mas o daemon não está rodando."
-  Write-Host "Abra o Docker Desktop, espere ficar 'Running' e rode de novo."
-  exit 1
+  $dockerOk = $false
 }
 
+if (-not $dockerOk) {
+  Write-Host "==> Abrindo Docker Desktop e aguardando ficar Running..."
+  $dockerApp = Join-Path ${env:ProgramFiles} "Docker\Docker\Docker Desktop.exe"
+  if (Test-Path $dockerApp) {
+    Start-Process $dockerApp
+  } else {
+    Start-Process "Docker Desktop" -ErrorAction SilentlyContinue
+  }
+  if (-not (Wait-DockerReady 90)) {
+    Write-Host "ERRO: Docker Desktop instalado, mas ainda não está Running."
+    Write-Host "Abra o Docker Desktop, aceite WSL2/reinício se pedir, e rode INSTALAR-Windows.bat de novo."
+    exit 1
+  }
+}
+
+# --- Node.js 20+ ---
+Refresh-Path
+$needNode = $false
 if (-not (Test-Command "node")) {
-  Write-Host "ERRO: Node.js não encontrado (precisa >= 20)."
-  Write-Host "Instale: https://nodejs.org/ (LTS) e reabra o PowerShell."
-  exit 1
+  $needNode = $true
+} else {
+  $nodeMajor = [int]((node -p "process.versions.node.split('.')[0]"))
+  if ($nodeMajor -lt 20) { $needNode = $true }
+}
+
+if ($needNode) {
+  Install-WithWinget "OpenJS.NodeJS.LTS" "Node.js LTS"
+  Refresh-Path
+  if (-not (Test-Command "node")) {
+    Write-Host "ERRO: Node instalado, mas ainda não está no PATH. Feche e abra o PowerShell / rode INSTALAR-Windows.bat de novo."
+    exit 1
+  }
 }
 
 $nodeMajor = [int]((node -p "process.versions.node.split('.')[0]"))
@@ -41,13 +106,27 @@ if ($nodeMajor -lt 20) {
   Write-Host "ERRO: Node >= 20 necessário (atual: $(node -v))"
   exit 1
 }
+Write-Host "    Node $(node -v)"
 
+# --- pnpm ---
 if (-not (Test-Command "pnpm")) {
   Write-Host "==> Habilitando pnpm (corepack)..."
-  corepack enable
-  corepack prepare pnpm@10.33.0 --activate
+  try {
+    corepack enable
+    corepack prepare pnpm@10.33.0 --activate
+  } catch {
+    npm install -g pnpm@10.33.0
+  }
+  Refresh-Path
 }
 
+if (-not (Test-Command "pnpm")) {
+  Write-Host "ERRO: pnpm não ficou disponível."
+  exit 1
+}
+Write-Host "    pnpm $(pnpm -v)"
+
+# --- .env / chave ---
 if (-not (Test-Path ".env")) {
   Write-Host "==> Criando .env a partir de .env.example"
   Copy-Item ".env.example" ".env"
@@ -109,8 +188,7 @@ try {
 Write-Host ""
 Write-Host "=============================================="
 Write-Host " Instalação concluída."
-Write-Host " Para abrir o painel em JANELA (não no browser):"
+Write-Host " Para abrir o painel em JANELA:"
 Write-Host "   • Clique duas vezes em: Iniciar-Windows.bat"
-Write-Host "   • Ou no PowerShell: .\scripts\start-windows.ps1"
-Write-Host " Login padrão (se seed rodou): admin@example.com / admin123"
+Write-Host " Login: admin@example.com / admin123"
 Write-Host "=============================================="

@@ -5,9 +5,12 @@ import { clearAutomationStopAll } from "../lib/automationQueue";
 import { importEmailList } from "./emailListImport.service";
 import { startAutomation } from "./applicants.service";
 import { findReservedEmails } from "./usedEmails.service";
+import {
+  DEFAULT_SIGNUP_EMAIL_DOMAIN,
+  DEFAULT_SIGNUP_EMAIL_PROVIDER,
+  getCompanySettings,
+} from "./companySettings.service";
 
-const EMAIL_DOMAIN = "mailsproton.com";
-const EMAIL_PROVIDER = "spacemail";
 const PASSWORD_SUFFIX = "@2026";
 const MAX_COUNT = 100;
 
@@ -54,7 +57,12 @@ function randomSuffix(len = 6): string {
   return out;
 }
 
-function pickCandidate(): { email: string; password: string; fullName: string; local: string } {
+function pickCandidate(domain: string): {
+  email: string;
+  password: string;
+  fullName: string;
+  local: string;
+} {
   const firstName = FIRST_NAMES[Math.floor(Math.random() * FIRST_NAMES.length)]!;
   const lastName = LAST_NAMES[Math.floor(Math.random() * LAST_NAMES.length)]!;
   const local = `${firstName}${lastName}${randomSuffix()}`;
@@ -62,7 +70,7 @@ function pickCandidate(): { email: string; password: string; fullName: string; l
   return {
     local,
     fullName,
-    email: `${local}@${EMAIL_DOMAIN}`.toLowerCase(),
+    email: `${local}@${domain}`.toLowerCase(),
     password: buildLastNamePlatformPassword(fullName),
   };
 }
@@ -82,8 +90,8 @@ export interface GenerateAndEnqueueBatchResult {
 }
 
 /**
- * Gera N e-mails @mailsproton.com inéditos (não em applicants nem used_emails),
- * importa (IMAP spacemail) e enfileira no rodízio de proxies ACTIVE.
+ * Gera N e-mails inéditos no domínio configurado da empresa,
+ * importa (IMAP do provider configurado) e enfileira no rodízio de proxies ACTIVE.
  * Senha Uber = Sobrenome@2026.
  */
 export async function generateAndEnqueueBatch(
@@ -97,6 +105,10 @@ export async function generateAndEnqueueBatch(
       `Informe uma quantidade entre 1 e ${MAX_COUNT}`,
     );
   }
+
+  const settings = await getCompanySettings(companyId);
+  const emailDomain = settings.signupEmailDomain || DEFAULT_SIGNUP_EMAIL_DOMAIN;
+  const emailProvider = settings.signupEmailProvider || DEFAULT_SIGNUP_EMAIL_PROVIDER;
 
   const activeProxies = await db
     .select({ id: proxyConfigs.id })
@@ -120,7 +132,7 @@ export async function generateAndEnqueueBatch(
   const pool: Array<ReturnType<typeof pickCandidate>> = [];
   const maxAttempts = count * 50;
   for (let attempt = 0; attempt < maxAttempts && pool.length < count * 2; attempt++) {
-    const candidate = pickCandidate();
+    const candidate = pickCandidate(emailDomain);
     if (blocked.has(candidate.email)) continue;
     blocked.add(candidate.email);
     pool.push(candidate);
@@ -141,10 +153,10 @@ export async function generateAndEnqueueBatch(
   }
 
   const textCased = finalCandidates
-    .map((c) => `${c.local}@${EMAIL_DOMAIN}|${c.password}`)
+    .map((c) => `${c.local}@${emailDomain}|${c.password}`)
     .join("\n");
 
-  const importResult = await importEmailList(companyId, textCased, { provider: EMAIL_PROVIDER });
+  const importResult = await importEmailList(companyId, textCased, { provider: emailProvider });
   if (importResult.imported === 0) {
     throw new HttpError(
       400,

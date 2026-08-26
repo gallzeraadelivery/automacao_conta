@@ -7,6 +7,11 @@ interface CompanySettings {
   placeholderPhoneBase: string;
   placeholderPhonePreview: string;
   earnCity: string;
+  signupEmailDomain: string;
+  signupEmailProvider: string;
+  catchallInboxEmail: string;
+  catchallDomains: string;
+  catchallPasswordSet: boolean;
   source: "database" | "defaults";
   updatedAt: string | null;
 }
@@ -26,8 +31,27 @@ export default function SettingsPage() {
   const [updatedAt, setUpdatedAt] = useState<string | null>(null);
   const [phoneBase, setPhoneBase] = useState("");
   const [earnCity, setEarnCity] = useState("");
+  const [signupEmailDomain, setSignupEmailDomain] = useState("");
+  const [signupEmailProvider, setSignupEmailProvider] = useState("spacemail");
+  const [catchallInboxEmail, setCatchallInboxEmail] = useState("");
+  const [catchallDomains, setCatchallDomains] = useState("");
+  const [catchallPassword, setCatchallPassword] = useState("");
+  const [catchallPasswordSet, setCatchallPasswordSet] = useState(false);
 
   const preview = useMemo(() => formatPreview(phoneBase), [phoneBase]);
+
+  const applySettings = useCallback((data: CompanySettings) => {
+    setPhoneBase(data.placeholderPhoneBase);
+    setEarnCity(data.earnCity);
+    setSignupEmailDomain(data.signupEmailDomain);
+    setSignupEmailProvider(data.signupEmailProvider);
+    setCatchallInboxEmail(data.catchallInboxEmail);
+    setCatchallDomains(data.catchallDomains);
+    setCatchallPasswordSet(data.catchallPasswordSet);
+    setCatchallPassword("");
+    setSource(data.source);
+    setUpdatedAt(data.updatedAt);
+  }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -38,11 +62,8 @@ export default function SettingsPage() {
       setError(result.error.message);
       return;
     }
-    setPhoneBase(result.data.placeholderPhoneBase);
-    setEarnCity(result.data.earnCity);
-    setSource(result.data.source);
-    setUpdatedAt(result.data.updatedAt);
-  }, []);
+    applySettings(result.data);
+  }, [applySettings]);
 
   useEffect(() => {
     void load();
@@ -53,24 +74,38 @@ export default function SettingsPage() {
     setSaving(true);
     setError(null);
     setSavedMsg(null);
+    const body: Record<string, string> = {
+      placeholderPhoneBase: phoneBase.replace(/\D/g, ""),
+      earnCity: earnCity.trim(),
+      signupEmailDomain: signupEmailDomain.trim().toLowerCase(),
+      signupEmailProvider: signupEmailProvider.trim().toLowerCase(),
+      catchallInboxEmail: catchallInboxEmail.trim().toLowerCase(),
+      catchallDomains: catchallDomains.trim().toLowerCase(),
+    };
+    if (catchallPassword.trim()) {
+      body.catchallPassword = catchallPassword.trim();
+    }
     const result = await apiRequest<CompanySettings>("/api/settings", {
       method: "PUT",
-      body: JSON.stringify({
-        placeholderPhoneBase: phoneBase.replace(/\D/g, ""),
-        earnCity: earnCity.trim(),
-      }),
+      body: JSON.stringify(body),
     });
     setSaving(false);
     if (!result.success) {
       setError(result.error.message);
       return;
     }
-    setPhoneBase(result.data.placeholderPhoneBase);
-    setEarnCity(result.data.earnCity);
-    setSource(result.data.source);
-    setUpdatedAt(result.data.updatedAt);
-    setSavedMsg("Configurações salvas. O worker usa os valores na próxima alocação (sem rebuild).");
+    applySettings(result.data);
+    setSavedMsg("Configurações salvas. Domínio/catch-all valem no próximo lote e OTP (sem rebuild).");
   }
+
+  const canSave =
+    phoneBase.replace(/\D/g, "").length === 10 &&
+    earnCity.trim().length >= 2 &&
+    signupEmailDomain.trim().length >= 3 &&
+    signupEmailProvider.trim().length >= 2 &&
+    catchallInboxEmail.includes("@") &&
+    catchallDomains.trim().length >= 3 &&
+    (catchallPasswordSet || catchallPassword.trim().length > 0);
 
   return (
     <div className="mx-auto max-w-2xl space-y-6">
@@ -108,9 +143,6 @@ export default function SettingsPage() {
                 </span>
               ) : null}
             </p>
-            <p className="mt-1 text-xs text-slate-400">
-              Números já usados na blacklist continuam bloqueados; a sequência sobe a partir desta base.
-            </p>
           </div>
 
           <div>
@@ -123,8 +155,86 @@ export default function SettingsPage() {
               placeholder="Orlando, FL"
               required
             />
+          </div>
+
+          <div className="border-t border-slate-100 pt-4">
+            <h2 className="text-sm font-semibold text-slate-900">E-mail / catch-all IMAP</h2>
+            <p className="mt-1 text-xs text-slate-500">
+              Domínio dos e-mails gerados no lote e caixa onde o OTP é lido.
+            </p>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-slate-700">Domínio de e-mail (signup)</label>
+            <input
+              type="text"
+              value={signupEmailDomain}
+              onChange={(e) => setSignupEmailDomain(e.target.value.toLowerCase())}
+              className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 font-mono text-sm"
+              placeholder="mailsproton.com"
+              required
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-slate-700">Provider IMAP</label>
+            <select
+              value={signupEmailProvider}
+              onChange={(e) => setSignupEmailProvider(e.target.value)}
+              className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+            >
+              <option value="spacemail">spacemail</option>
+              <option value="gmail">gmail</option>
+              <option value="outlook">outlook</option>
+              <option value="yahoo">yahoo</option>
+            </select>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-slate-700">Login catch-all (caixa IMAP)</label>
+            <input
+              type="email"
+              value={catchallInboxEmail}
+              onChange={(e) => setCatchallInboxEmail(e.target.value.toLowerCase())}
+              className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 font-mono text-sm"
+              placeholder="galldelivery@mail2too.com"
+              required
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-slate-700">
+              Senha catch-all
+              {catchallPasswordSet ? (
+                <span className="ml-2 font-normal text-emerald-700">(já cadastrada — deixe em branco para manter)</span>
+              ) : (
+                <span className="ml-2 font-normal text-amber-700">(obrigatória na 1ª vez)</span>
+              )}
+            </label>
+            <input
+              type="password"
+              value={catchallPassword}
+              onChange={(e) => setCatchallPassword(e.target.value)}
+              className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+              placeholder={catchallPasswordSet ? "••••••••" : "Senha da caixa IMAP"}
+              autoComplete="new-password"
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-slate-700">
+              Domínios que usam o catch-all (CSV)
+            </label>
+            <input
+              type="text"
+              value={catchallDomains}
+              onChange={(e) => setCatchallDomains(e.target.value.toLowerCase())}
+              className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 font-mono text-sm"
+              placeholder="mailsproton.com,mail2too.com"
+              required
+            />
             <p className="mt-1 text-xs text-slate-400">
-              Texto enviado na etapa de localização de ganhos (ex.: Orlando, FL).
+              Qualquer e-mail nesses domínios lê OTP na caixa catch-all acima.
             </p>
           </div>
 
@@ -155,7 +265,7 @@ export default function SettingsPage() {
             </button>
             <button
               type="submit"
-              disabled={saving || phoneBase.replace(/\D/g, "").length !== 10 || !earnCity.trim()}
+              disabled={saving || !canSave}
               className="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50"
             >
               {saving ? "Salvando…" : "Salvar"}

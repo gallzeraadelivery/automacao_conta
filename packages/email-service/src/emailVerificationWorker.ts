@@ -39,6 +39,13 @@ export interface EmailVerificationWorkerOptions {
   vault?: CredentialVault;
   auditLogger?: AuditLogger;
   companyId?: string;
+  /**
+   * Mapa domínio → caixa catch-all da empresa (Configurações).
+   * Sem isso, usa IMAP_CATCHALL_INBOX_BY_DOMAIN estático.
+   */
+  catchallDomainMapResolver?: (
+    companyId: string,
+  ) => Promise<Readonly<Record<string, string>>>;
   browserProfileHooks?: BrowserProfileHooks;
   resolveProxyConnection?: (proxyId: string) => Promise<ProxyConnectionOptions | undefined>;
   /**
@@ -93,6 +100,9 @@ export class EmailVerificationWorker implements IEmailVerificationWorker {
   private readonly vault: CredentialVault;
   private readonly auditLogger: AuditLogger;
   private readonly companyId?: string;
+  private readonly catchallDomainMapResolver?: (
+    companyId: string,
+  ) => Promise<Readonly<Record<string, string>>>;
   private readonly browserProfileHooks?: BrowserProfileHooks;
   private readonly resolveProxyConnection?: (
     proxyId: string,
@@ -119,6 +129,7 @@ export class EmailVerificationWorker implements IEmailVerificationWorker {
       options.vault ??
       new CredentialVault({ auditLogger: this.auditLogger, companyId: options.companyId });
     this.companyId = options.companyId;
+    this.catchallDomainMapResolver = options.catchallDomainMapResolver;
     this.browserProfileHooks = options.browserProfileHooks;
     this.resolveProxyConnection = options.resolveProxyConnection;
     this.captureDebugScreenshot = options.captureDebugScreenshot;
@@ -316,7 +327,14 @@ export class EmailVerificationWorker implements IEmailVerificationWorker {
   private async resolveImapAccount(
     logicalAccount: EmailAccountCredentialRecord,
   ): Promise<EmailAccountCredentialRecord> {
-    const catchallEmail = resolveCatchallInboxEmail(logicalAccount.emailAddress);
+    const domainMap =
+      this.catchallDomainMapResolver && this.companyId
+        ? await this.catchallDomainMapResolver(this.companyId)
+        : undefined;
+    const catchallEmail = resolveCatchallInboxEmail(
+      logicalAccount.emailAddress,
+      domainMap,
+    );
     if (!catchallEmail) return logicalAccount;
 
     const inbox = await this.emailAccountRepository.getByCompanyAndEmail(

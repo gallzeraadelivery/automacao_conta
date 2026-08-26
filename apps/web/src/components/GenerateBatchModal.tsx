@@ -54,8 +54,9 @@ export function GenerateBatchModal({
       <div className="w-full max-w-lg rounded-xl bg-white p-6 shadow-lg">
         <h2 className="text-lg font-semibold text-slate-900">Gerar e enfileirar</h2>
         <p className="mt-1 text-sm text-slate-500">
-          Cria e-mails novos <strong>@mailsproton.com</strong> (inéditos), importa e enfileira no
-          rodízio dos proxies ACTIVE. Senha Uber: <strong>Sobrenome@2026</strong> (por motorista).
+          Cria e-mails novos no domínio configurado em <strong>Configurações</strong> (inéditos),
+          importa e enfileira no rodízio dos proxies ACTIVE. Senha Uber:{" "}
+          <strong>Sobrenome@2026</strong> (por motorista).
         </p>
 
         {!result && (

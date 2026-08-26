@@ -31,6 +31,15 @@ settingsRouter.put("/", requireRole("admin", "operator"), async (req, res, next)
         nextPhoneBase: current.placeholderPhoneBase,
         previousEarnCity: previous.earnCity,
         nextEarnCity: current.earnCity,
+        previousSignupDomain: previous.signupEmailDomain,
+        nextSignupDomain: current.signupEmailDomain,
+        previousCatchallInbox: previous.catchallInboxEmail,
+        nextCatchallInbox: current.catchallInboxEmail,
+        previousCatchallDomains: previous.catchallDomains,
+        nextCatchallDomains: current.catchallDomains,
+        catchallPasswordUpdated: Boolean(
+          typeof input.catchallPassword === "string" && input.catchallPassword.trim(),
+        ),
         previousSource: previous.source,
       },
     });

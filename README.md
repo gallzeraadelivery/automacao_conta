@@ -18,13 +18,13 @@ O painel abre em **janela própria** (não no navegador). Guia completo:
 → **[INSTALACAO.md](./INSTALACAO.md)**
 
 ```bash
-# Mac
-./scripts/install-mac.sh
-# depois: clique em Iniciar-Mac.command  (ou ./scripts/start-mac.sh)
+# Mac — instalar (1ª vez)
+# clique em INSTALAR-Mac.command
+# depois: clique em Iniciar-Mac.command
 
-# Windows (PowerShell)
-.\scripts\install-windows.ps1
-# depois: clique em Iniciar-Windows.bat  (ou .\scripts\start-windows.ps1)
+# Windows (PowerShell) — instalar (1ª vez)
+# clique em INSTALAR-Windows.bat
+# depois: clique em Iniciar-Windows.bat
 ```
 
 ## Fase 1 — o que já existe
