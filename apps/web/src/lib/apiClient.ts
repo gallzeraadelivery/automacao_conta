@@ -68,6 +68,14 @@ export async function apiRequest<T>(
 ): Promise<ApiResponse<T>> {
   let result = await rawRequest<T>(path, options);
 
+  if (!result.success && !options.skipAuth) {
+    if (result.error.code === "LICENSE_REQUIRED" || result.error.code === "LICENSE_DENIED") {
+      if (typeof window !== "undefined" && !window.location.pathname.startsWith("/licenca")) {
+        window.location.assign("/licenca");
+      }
+    }
+  }
+
   if (!result.success && result.error.code === "INVALID_TOKEN" && !options.skipAuth) {
     const refreshed = await tryRefresh();
     if (refreshed) {

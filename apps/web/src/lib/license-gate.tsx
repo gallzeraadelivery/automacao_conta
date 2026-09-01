@@ -14,7 +14,11 @@ export interface LicenseStatusView {
   machineId: string | null;
 }
 
-const LICENSE_EXEMPT_PREFIXES = ["/ativar-licenca", "/d/"];
+const LICENSE_EXEMPT_PREFIXES = ["/licenca", "/ativar-licenca", "/d/"];
+
+function shouldBlock(status: LicenseStatusView): boolean {
+  return status.enabled && !status.ok;
+}
 
 export function LicenseGate({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
@@ -28,24 +32,34 @@ export function LicenseGate({ children }: { children: React.ReactNode }) {
     }
 
     let cancelled = false;
-    apiRequest<LicenseStatusView>("/api/license/status", { skipAuth: true }).then((result) => {
+
+    async function checkLicense() {
+      const result = await apiRequest<LicenseStatusView>("/api/license/status", { skipAuth: true });
       if (cancelled) return;
-      if (result.success && result.data.enabled && !result.data.ok) {
-        router.replace("/ativar-licenca");
+
+      if (result.success && shouldBlock(result.data)) {
+        router.replace("/licenca");
         return;
       }
+
       setReady(true);
-    });
+    }
+
+    void checkLicense();
+    const timer = window.setInterval(() => {
+      void checkLicense();
+    }, 60_000);
 
     return () => {
       cancelled = true;
+      window.clearInterval(timer);
     };
   }, [pathname, router]);
 
   if (!ready) {
     return (
       <div className="flex min-h-screen items-center justify-center text-sm text-slate-500">
-        Carregando...
+        Verificando licenca...
       </div>
     );
   }
