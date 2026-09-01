@@ -2,6 +2,7 @@
 $ErrorActionPreference = "Continue"
 $Root = Resolve-Path (Join-Path $PSScriptRoot "..")
 Set-Location $Root
+. (Join-Path $PSScriptRoot "docker-windows.ps1")
 
 $LogFile = Join-Path $Root "update-windows.log"
 function Write-Log([string]$Message) {
@@ -20,36 +21,7 @@ Write-Log "    Pasta: $Root"
 Write-Log "    PowerShell: $($PSVersionTable.PSVersion)"
 Write-Log ""
 
-Refresh-Path
-
-if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
-  Write-Log "ERRO: Docker nao encontrado. Rode INSTALAR-Windows.bat primeiro."
-  exit 1
-}
-
-$dockerOk = $false
-try {
-  docker info 2>$null | Out-Null
-  if ($LASTEXITCODE -eq 0) { $dockerOk = $true }
-} catch {
-  $dockerOk = $false
-}
-
-if (-not $dockerOk) {
-  Write-Log "Abrindo Docker Desktop..."
-  $dockerApp = Join-Path ${env:ProgramFiles} "Docker\Docker\Docker Desktop.exe"
-  if (Test-Path $dockerApp) { Start-Process $dockerApp }
-  $ready = $false
-  for ($i = 1; $i -le 60; $i++) {
-    docker info 2>$null | Out-Null
-    if ($LASTEXITCODE -eq 0) { $ready = $true; break }
-    Start-Sleep -Seconds 2
-  }
-  if (-not $ready) {
-    Write-Log "ERRO: Docker ainda nao esta Running."
-    exit 1
-  }
-}
+Ensure-DockerReady
 
 if (Test-Path ".git") {
   if (-not (Get-Command git -ErrorAction SilentlyContinue)) {

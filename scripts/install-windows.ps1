@@ -4,24 +4,16 @@
 $ErrorActionPreference = "Stop"
 $Root = Resolve-Path (Join-Path $PSScriptRoot "..")
 Set-Location $Root
+. (Join-Path $PSScriptRoot "docker-windows.ps1")
 
 Write-Host "==> Uber Automation - instalacao (Windows)"
 Write-Host "    Pasta: $Root"
 Write-Host "    PowerShell: $($PSVersionTable.PSVersion)"
 Write-Host ""
 
-function Test-Command([string]$Name) {
-  return [bool](Get-Command $Name -ErrorAction SilentlyContinue)
-}
-
-function Refresh-Path {
-  $env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" +
-    [System.Environment]::GetEnvironmentVariable("Path", "User")
-}
-
 function Install-WithWinget([string]$Id, [string]$Label) {
-  if (-not (Test-Command "winget")) {
-    Write-Host "ERRO: winget nao encontrado. Atualize o Windows / App Installer."
+  if (-not (Test-CommandExists "winget")) {
+    Write-Host "ERRO: winget nao encontrado. Atualize o Windows / App Installer e tente de novo."
     Write-Host "Ou instale manualmente: $Label"
     exit 1
   }
@@ -31,62 +23,14 @@ function Install-WithWinget([string]$Id, [string]$Label) {
     Write-Host "ERRO: winget falhou ao instalar $Label (codigo $LASTEXITCODE)."
     exit 1
   }
-  Refresh-Path
+  Refresh-PathEnv
 }
 
-function Wait-DockerReady([int]$MaxAttempts = 90) {
-  for ($i = 1; $i -le $MaxAttempts; $i++) {
-    try {
-      docker info 2>$null | Out-Null
-      if ($LASTEXITCODE -eq 0) {
-        Write-Host "    Docker OK ($i tentativas)"
-        return $true
-      }
-    } catch { }
-    Start-Sleep -Seconds 2
-  }
-  return $false
-}
+Ensure-DockerReady
 
-Refresh-Path
-if (-not (Test-Command "docker")) {
-  Install-WithWinget "Docker.DockerDesktop" "Docker Desktop"
-  Refresh-Path
-  if (-not (Test-Command "docker")) {
-    Write-Host ""
-    Write-Host "Docker Desktop foi instalado, mas o comando docker ainda nao esta no PATH."
-    Write-Host "1. Abra o Docker Desktop pelo menu Iniciar"
-    Write-Host "2. Complete o setup (WSL2 se pedir) e REINICIE o PC se solicitado"
-    Write-Host "3. Rode de novo: INSTALAR-Windows.bat"
-    exit 1
-  }
-}
-
-try {
-  docker info 2>$null | Out-Null
-  $dockerOk = ($LASTEXITCODE -eq 0)
-} catch {
-  $dockerOk = $false
-}
-
-if (-not $dockerOk) {
-  Write-Host "==> Abrindo Docker Desktop e aguardando ficar Running..."
-  $dockerApp = Join-Path ${env:ProgramFiles} "Docker\Docker\Docker Desktop.exe"
-  if (Test-Path $dockerApp) {
-    Start-Process $dockerApp
-  } else {
-    Start-Process "Docker Desktop" -ErrorAction SilentlyContinue
-  }
-  if (-not (Wait-DockerReady 90)) {
-    Write-Host "ERRO: Docker Desktop instalado, mas ainda nao esta Running."
-    Write-Host "Abra o Docker Desktop, aceite WSL2/reinicio se pedir, e rode INSTALAR-Windows.bat de novo."
-    exit 1
-  }
-}
-
-Refresh-Path
+Refresh-PathEnv
 $needNode = $false
-if (-not (Test-Command "node")) {
+if (-not (Test-CommandExists "node")) {
   $needNode = $true
 } else {
   $nodeMajor = [int]((node -p "process.versions.node.split('.')[0]"))
@@ -95,8 +39,8 @@ if (-not (Test-Command "node")) {
 
 if ($needNode) {
   Install-WithWinget "OpenJS.NodeJS.LTS" "Node.js LTS"
-  Refresh-Path
-  if (-not (Test-Command "node")) {
+  Refresh-PathEnv
+  if (-not (Test-CommandExists "node")) {
     Write-Host "ERRO: Node instalado, mas ainda nao esta no PATH. Rode INSTALAR-Windows.bat de novo."
     exit 1
   }
@@ -109,7 +53,7 @@ if ($nodeMajor -lt 20) {
 }
 Write-Host "    Node $(node -v)"
 
-if (-not (Test-Command "pnpm")) {
+if (-not (Test-CommandExists "pnpm")) {
   Write-Host "==> Habilitando pnpm (corepack)..."
   try {
     corepack enable
@@ -117,10 +61,10 @@ if (-not (Test-Command "pnpm")) {
   } catch {
     npm install -g pnpm@10.33.0
   }
-  Refresh-Path
+  Refresh-PathEnv
 }
 
-if (-not (Test-Command "pnpm")) {
+if (-not (Test-CommandExists "pnpm")) {
   Write-Host "ERRO: pnpm nao ficou disponivel."
   exit 1
 }
@@ -191,7 +135,7 @@ for ($i = 1; $i -le 60; $i++) {
   }
 }
 if (-not $ok) {
-  Write-Host "AVISO: API ainda nao respondeu - confira licenca no .env ou logs da API."
+  Write-Host "AVISO: API ainda nao respondeu - confira licenca no painel ou logs da API."
 }
 
 Write-Host "==> Seed do admin (se ainda nao existir)..."

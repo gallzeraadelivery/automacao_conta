@@ -2,38 +2,9 @@
 $ErrorActionPreference = "Stop"
 $Root = Resolve-Path (Join-Path $PSScriptRoot "..")
 Set-Location $Root
+. (Join-Path $PSScriptRoot "docker-windows.ps1")
 
-function Refresh-Path {
-  $env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" +
-    [System.Environment]::GetEnvironmentVariable("Path", "User")
-}
-Refresh-Path
-
-if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
-  Write-Host "Docker nao encontrado. Rode INSTALAR-Windows.bat primeiro."
-  exit 1
-}
-
-try {
-  docker info 2>$null | Out-Null
-  if ($LASTEXITCODE -ne 0) { throw "docker down" }
-} catch {
-  Write-Host "Abrindo Docker Desktop..."
-  $dockerApp = Join-Path ${env:ProgramFiles} "Docker\Docker\Docker Desktop.exe"
-  if (Test-Path $dockerApp) { Start-Process $dockerApp }
-  $ready = $false
-  for ($i = 1; $i -le 60; $i++) {
-    try {
-      docker info 2>$null | Out-Null
-      if ($LASTEXITCODE -eq 0) { $ready = $true; break }
-    } catch { }
-    Start-Sleep -Seconds 2
-  }
-  if (-not $ready) {
-    Write-Host "ERRO: Docker ainda nao esta Running."
-    exit 1
-  }
-}
+Ensure-DockerReady
 
 Write-Host "==> Garantindo containers..."
 docker compose -f infra/docker/docker-compose.yml up -d
@@ -52,13 +23,12 @@ if (-not $webOk) {
   Write-Host "AVISO: painel ainda nao respondeu em :3000"
 }
 
-$electronBin = "apps\desktop-shell\node_modules\.bin\electron.cmd"
 if (-not (Test-Path "apps\desktop-shell\node_modules\electron")) {
   Write-Host "==> Instalando Electron do painel..."
-  Refresh-Path
-  if (Get-Command pnpm -ErrorAction SilentlyContinue) {
+  Refresh-PathEnv
+  if (Test-CommandExists "pnpm") {
     pnpm install --filter "@uber-automation/desktop-shell..."
-  } elseif (Get-Command npm -ErrorAction SilentlyContinue) {
+  } elseif (Test-CommandExists "npm") {
     Push-Location apps\desktop-shell
     npm install
     Pop-Location
@@ -74,7 +44,7 @@ if (Test-Path "node_modules\.bin\electron.cmd") {
   & ".\node_modules\.bin\electron.cmd" .
   exit $LASTEXITCODE
 }
-if (Get-Command pnpm -ErrorAction SilentlyContinue) {
+if (Test-CommandExists "pnpm") {
   pnpm start
   exit $LASTEXITCODE
 }
