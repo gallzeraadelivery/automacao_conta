@@ -135,11 +135,14 @@ docker exec uber-automation-worker-1 printenv AUTOMATION_TARGET 2>$null | ForEac
 
 Refresh-PathEnv
 Add-UserNpmToPath
-if (Test-CommandExists "pnpm") {
+Refresh-PathEnv
+Add-UserNpmToPath
+if (Find-PnpmCmd) {
   Write-Log "==> Atualizando deps do painel (pnpm)..."
-  pnpm install --frozen-lockfile 2>&1 | ForEach-Object { Write-Log "    $_" }
-  if ($LASTEXITCODE -ne 0) {
-    pnpm install 2>&1 | ForEach-Object { Write-Log "    $_" }
+  if ((Invoke-PnpmTry install --frozen-lockfile) -ne 0) {
+    Invoke-PnpmTry install 2>&1 | ForEach-Object { Write-Log "    $_" }
+  } else {
+    Write-Log "    pnpm install OK"
   }
 }
 

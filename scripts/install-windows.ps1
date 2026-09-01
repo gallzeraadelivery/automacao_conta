@@ -52,10 +52,8 @@ if (-not (Test-Path ".secrets.key")) {
 }
 
 Write-Host "==> Instalando dependencias do monorepo (painel em janela)..."
-try {
-  pnpm install --frozen-lockfile
-} catch {
-  pnpm install
+if ((Invoke-PnpmTry install --frozen-lockfile) -ne 0) {
+  Invoke-Pnpm install
 }
 
 Write-Host "==> Subindo stack Docker (postgres, redis, api, web, worker)..."
@@ -84,12 +82,12 @@ if (-not $ok) {
 }
 
 Write-Host "==> Seed do admin (se ainda nao existir)..."
-try { pnpm db:migrate } catch { }
+if ((Invoke-PnpmTry db:migrate) -ne 0) {
+  Write-Host "    (migrate ignorado ou ja rodou)"
+}
 $env:SEED_ADMIN_EMAIL = if ($env:SEED_ADMIN_EMAIL) { $env:SEED_ADMIN_EMAIL } else { "admin@example.com" }
 $env:SEED_ADMIN_PASSWORD = if ($env:SEED_ADMIN_PASSWORD) { $env:SEED_ADMIN_PASSWORD } else { "admin123" }
-try {
-  pnpm db:seed
-} catch {
+if ((Invoke-PnpmTry db:seed) -ne 0) {
   Write-Host "    (seed ignorado - provavelmente ja rodou)"
 }
 

@@ -1,14 +1,21 @@
 # Node/pnpm no Windows sem precisar de admin (evita EPERM em Program Files).
 
+$script:PnpmExecutable = $null
+
 function Get-UserNpmPrefix {
   return Join-Path $env:LOCALAPPDATA "uber-automation-npm"
 }
 
+function Get-PnpmHome {
+  return Join-Path $env:LOCALAPPDATA "pnpm"
+}
+
 function Add-UserNpmToPath {
   $prefix = Get-UserNpmPrefix
+  $pnpmHome = Get-PnpmHome
   $bin = Join-Path $prefix "node_modules\.bin"
-  foreach ($entry in @($bin, $prefix)) {
-    if ($env:Path -notlike "*$entry*") {
+  foreach ($entry in @($pnpmHome, $bin, $prefix)) {
+    if ($entry -and $env:Path -notlike "*$entry*") {
       $env:Path = "$entry;$env:Path"
     }
   }
@@ -16,15 +23,67 @@ function Add-UserNpmToPath {
 
 function Save-UserNpmToPath {
   $prefix = Get-UserNpmPrefix
+  $pnpmHome = Get-PnpmHome
   $bin = Join-Path $prefix "node_modules\.bin"
   $userPath = [System.Environment]::GetEnvironmentVariable("Path", "User")
   if ($null -eq $userPath) { $userPath = "" }
-  foreach ($entry in @($bin, $prefix)) {
-    if ($userPath -notlike "*$entry*") {
+  foreach ($entry in @($pnpmHome, $bin, $prefix)) {
+    if ($entry -and $userPath -notlike "*$entry*") {
       $userPath = "$entry;$userPath"
     }
   }
   [System.Environment]::SetEnvironmentVariable("Path", $userPath, "User")
+}
+
+function Find-PnpmCmd {
+  if ($script:PnpmExecutable -and (Test-Path $script:PnpmExecutable)) {
+    return $script:PnpmExecutable
+  }
+
+  $candidates = @(
+    (Join-Path (Get-UserNpmPrefix) "pnpm.cmd"),
+    (Join-Path (Get-PnpmHome) "pnpm.cmd"),
+    (Join-Path (Get-UserNpmPrefix) "node_modules\.bin\pnpm.cmd")
+  )
+  foreach ($path in $candidates) {
+    if ($path -and (Test-Path $path)) {
+      $script:PnpmExecutable = $path
+      return $path
+    }
+  }
+
+  if (Test-CommandExists "pnpm") {
+    $script:PnpmExecutable = "pnpm"
+    return "pnpm"
+  }
+
+  return $null
+}
+
+function Invoke-Pnpm {
+  param(
+    [Parameter(ValueFromRemainingArguments = $true)]
+    [string[]]$PnpmArgs
+  )
+  $code = Invoke-PnpmTry @PnpmArgs
+  if ($code -ne 0) {
+    exit $code
+  }
+}
+
+function Invoke-PnpmTry {
+  param(
+    [Parameter(ValueFromRemainingArguments = $true)]
+    [string[]]$PnpmArgs
+  )
+  $cmd = Find-PnpmCmd
+  if (-not $cmd) {
+    Write-Host "ERRO: pnpm nao encontrado."
+    return 1
+  }
+  & $cmd @PnpmArgs
+  if ($null -eq $LASTEXITCODE) { return 0 }
+  return $LASTEXITCODE
 }
 
 function Ensure-Node {
@@ -53,12 +112,40 @@ function Ensure-Node {
   Write-Host "    Node $(node -v)"
 }
 
+function Install-PnpmWithNpm {
+  $prefix = Get-UserNpmPrefix
+  New-Item -ItemType Directory -Force -Path $prefix | Out-Null
+  npm config set prefix $prefix 2>$null | Out-Null
+  npm install -g pnpm@10.33.0
+  return ($LASTEXITCODE -eq 0)
+}
+
+function Install-PnpmWithOfficialScript {
+  $pnpmHome = Get-PnpmHome
+  New-Item -ItemType Directory -Force -Path $pnpmHome | Out-Null
+  $env:PNPM_HOME = $pnpmHome
+  Add-UserNpmToPath
+  try {
+    $installScript = Invoke-WebRequest -Uri "https://get.pnpm.io/install.ps1" -UseBasicParsing
+    Invoke-Expression $installScript.Content
+    return $true
+  } catch {
+    Write-Host "    AVISO: instalador oficial do pnpm falhou: $($_.Exception.Message)"
+    return $false
+  }
+}
+
 function Ensure-Pnpm {
   Refresh-PathEnv
   Add-UserNpmToPath
 
-  if (Test-CommandExists "pnpm") {
-    Write-Host "    pnpm $(pnpm -v)"
+  $existing = Find-PnpmCmd
+  if ($existing) {
+    if ($existing -eq "pnpm") {
+      Write-Host "    pnpm $(pnpm -v)"
+    } else {
+      Write-Host "    pnpm $(& $existing -v)"
+    }
     return
   }
 
@@ -68,27 +155,32 @@ function Ensure-Pnpm {
   }
 
   Write-Host "==> Instalando pnpm no usuario (sem admin)..."
-  $prefix = Get-UserNpmPrefix
-  New-Item -ItemType Directory -Force -Path $prefix | Out-Null
-
-  npm config set prefix $prefix 2>$null | Out-Null
-  npm install -g pnpm@10.33.0
-  if ($LASTEXITCODE -ne 0) {
-    Write-Host "ERRO: falha ao instalar pnpm (codigo $LASTEXITCODE)."
-    Write-Host "Tente abrir o PowerShell como Administrador e rode INSTALAR-Windows.bat de novo."
-    exit 1
-  }
-
+  $ok = Install-PnpmWithNpm
   Add-UserNpmToPath
   Save-UserNpmToPath
   Refresh-PathEnv
 
-  if (-not (Test-CommandExists "pnpm")) {
+  if (-not (Find-PnpmCmd)) {
+    Write-Host "    Tentando instalador oficial do pnpm..."
+    [void](Install-PnpmWithOfficialScript)
+    Add-UserNpmToPath
+    Save-UserNpmToPath
+    Refresh-PathEnv
+  }
+
+  $cmd = Find-PnpmCmd
+  if (-not $cmd) {
     Write-Host "ERRO: pnpm nao ficou disponivel apos instalacao."
+    Write-Host "    Pasta esperada: $(Get-UserNpmPrefix)"
     exit 1
   }
 
-  Write-Host "    pnpm $(pnpm -v)"
+  if ($cmd -eq "pnpm") {
+    Write-Host "    pnpm $(pnpm -v)"
+  } else {
+    Write-Host "    pnpm $(& $cmd -v)"
+    Write-Host "    Caminho: $cmd"
+  }
 }
 
 function Ensure-Git {

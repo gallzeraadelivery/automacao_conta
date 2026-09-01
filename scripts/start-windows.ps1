@@ -28,8 +28,8 @@ if (-not (Test-Path "apps\desktop-shell\node_modules\electron")) {
   Write-Host "==> Instalando Electron do painel..."
   Refresh-PathEnv
   Add-UserNpmToPath
-  if (Test-CommandExists "pnpm") {
-    pnpm install --filter "@uber-automation/desktop-shell..."
+  if (Find-PnpmCmd) {
+    Invoke-Pnpm install --filter "@uber-automation/desktop-shell..."
   } elseif (Test-CommandExists "npm") {
     Push-Location apps\desktop-shell
     npm install
@@ -46,8 +46,8 @@ if (Test-Path "node_modules\.bin\electron.cmd") {
   & ".\node_modules\.bin\electron.cmd" .
   exit $LASTEXITCODE
 }
-if (Test-CommandExists "pnpm") {
-  pnpm start
+if (Find-PnpmCmd) {
+  Invoke-Pnpm start
   exit $LASTEXITCODE
 }
 Write-Host "ERRO: Electron nao encontrado."
