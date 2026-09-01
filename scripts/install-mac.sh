@@ -148,6 +148,35 @@ ensure_pnpm() {
   echo "    pnpm $(pnpm -v)"
 }
 
+ensure_git() {
+  if command -v git >/dev/null 2>&1; then
+    echo "    Git OK"
+    return 0
+  fi
+
+  append_brew_path
+  if ! command -v brew >/dev/null 2>&1; then
+    echo "==> Homebrew necessario para instalar o Git..."
+    NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+    append_brew_path
+  fi
+
+  if ! command -v brew >/dev/null 2>&1; then
+    echo "ERRO: nao foi possivel instalar o Git (Homebrew indisponivel)."
+    echo "Instale Xcode Command Line Tools: xcode-select --install"
+    exit 1
+  fi
+
+  echo "==> Instalando Git (brew)..."
+  brew install git
+
+  if ! command -v git >/dev/null 2>&1; then
+    echo "ERRO: Git nao ficou disponivel apos instalacao."
+    exit 1
+  fi
+  echo "    Git OK"
+}
+
 # --- Docker Desktop (precisa privilégio de admin na 1ª instalação) ---
 if ! command -v docker >/dev/null 2>&1; then
   append_brew_path
@@ -189,13 +218,12 @@ if ! docker info >/dev/null 2>&1; then
 fi
 echo "    Docker OK"
 
-# --- Node + pnpm (usuário, sem sudo) ---
+# --- Node + pnpm + git (instala o que faltar) ---
+echo "==> Verificando dependencias (instala o que faltar)..."
 ensure_node_user
 ensure_pnpm
-
-if ! command -v git >/dev/null 2>&1; then
-  echo "AVISO: git nao encontrado. Para ATUALIZAR depois, instale Xcode CLT ou: brew install git"
-fi
+ensure_git
+echo "==> Dependencias OK (Docker, Node, pnpm, Git)"
 
 # --- .env / chave ---
 if [[ ! -f .env ]]; then

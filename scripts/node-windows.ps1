@@ -27,6 +27,32 @@ function Save-UserNpmToPath {
   [System.Environment]::SetEnvironmentVariable("Path", $userPath, "User")
 }
 
+function Ensure-Node {
+  Refresh-PathEnv
+  $needNode = $false
+  if (-not (Test-CommandExists "node")) {
+    $needNode = $true
+  } else {
+    $nodeMajor = [int]((node -p "process.versions.node.split('.')[0]"))
+    if ($nodeMajor -lt 20) { $needNode = $true }
+  }
+  if (-not $needNode) {
+    Write-Host "    Node $(node -v)"
+    return
+  }
+  Install-PackageWithWinget "OpenJS.NodeJS.LTS" "Node.js LTS"
+  if (-not (Test-CommandExists "node")) {
+    Write-Host "ERRO: Node instalado, mas ainda nao esta no PATH. Feche e abra o terminal e rode INSTALAR-Windows.bat de novo."
+    exit 1
+  }
+  $nodeMajor = [int]((node -p "process.versions.node.split('.')[0]"))
+  if ($nodeMajor -lt 20) {
+    Write-Host "ERRO: Node >= 20 necessario (atual: $(node -v))"
+    exit 1
+  }
+  Write-Host "    Node $(node -v)"
+}
+
 function Ensure-Pnpm {
   Refresh-PathEnv
   Add-UserNpmToPath
@@ -71,17 +97,22 @@ function Ensure-Git {
     Write-Host "    Git OK"
     return
   }
-  if (-not (Test-CommandExists "winget")) {
-    Write-Host "AVISO: Git nao encontrado. Para ATUALIZAR depois, instale:"
-    Write-Host "    https://git-scm.com/download/win"
-    return
-  }
-  Write-Host "==> Instalando Git for Windows (para ATUALIZAR depois)..."
-  winget install -e --id Git.Git --accept-package-agreements --accept-source-agreements --disable-interactivity
+  Install-PackageWithWinget "Git.Git" "Git for Windows"
   Refresh-PathEnv
-  if (Test-CommandExists "git") {
-    Write-Host "    Git OK"
-  } else {
-    Write-Host "AVISO: Git nao ficou no PATH. Instale manualmente se for usar git pull."
+  if (-not (Test-CommandExists "git")) {
+    Write-Host "ERRO: Git nao ficou disponivel apos instalacao."
+    Write-Host "    Instale manualmente: https://git-scm.com/download/win"
+    exit 1
   }
+  Write-Host "    Git OK"
+}
+
+function Ensure-WindowsPrerequisites {
+  Write-Host "==> Verificando dependencias (instala o que faltar)..."
+  Ensure-Winget
+  Ensure-DockerReady
+  Ensure-Node
+  Ensure-Pnpm
+  Ensure-Git
+  Write-Host "==> Dependencias OK (Docker, Node, pnpm, Git)"
 }

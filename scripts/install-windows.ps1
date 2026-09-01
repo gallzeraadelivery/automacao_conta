@@ -1,4 +1,5 @@
 # Instalacao automatica no Windows (compativel com PowerShell 5.1).
+# Instala automaticamente tudo que faltar: winget, Docker, Node, pnpm, Git.
 # Use: clique duplo em INSTALAR-Windows.bat
 
 $ErrorActionPreference = "Stop"
@@ -12,50 +13,7 @@ Write-Host "    Pasta: $Root"
 Write-Host "    PowerShell: $($PSVersionTable.PSVersion)"
 Write-Host ""
 
-function Install-WithWinget([string]$Id, [string]$Label) {
-  if (-not (Test-CommandExists "winget")) {
-    Write-Host "ERRO: winget nao encontrado. Atualize o Windows / App Installer e tente de novo."
-    Write-Host "Ou instale manualmente: $Label"
-    exit 1
-  }
-  Write-Host "==> Instalando $Label via winget ($Id)..."
-  winget install -e --id $Id --accept-package-agreements --accept-source-agreements --disable-interactivity
-  if ($LASTEXITCODE -gt 1) {
-    Write-Host "ERRO: winget falhou ao instalar $Label (codigo $LASTEXITCODE)."
-    exit 1
-  }
-  Refresh-PathEnv
-}
-
-Ensure-DockerReady
-
-Refresh-PathEnv
-$needNode = $false
-if (-not (Test-CommandExists "node")) {
-  $needNode = $true
-} else {
-  $nodeMajor = [int]((node -p "process.versions.node.split('.')[0]"))
-  if ($nodeMajor -lt 20) { $needNode = $true }
-}
-
-if ($needNode) {
-  Install-WithWinget "OpenJS.NodeJS.LTS" "Node.js LTS"
-  Refresh-PathEnv
-  if (-not (Test-CommandExists "node")) {
-    Write-Host "ERRO: Node instalado, mas ainda nao esta no PATH. Rode INSTALAR-Windows.bat de novo."
-    exit 1
-  }
-}
-
-$nodeMajor = [int]((node -p "process.versions.node.split('.')[0]"))
-if ($nodeMajor -lt 20) {
-  Write-Host "ERRO: Node >= 20 necessario (atual: $(node -v))"
-  exit 1
-}
-Write-Host "    Node $(node -v)"
-
-Ensure-Pnpm
-Ensure-Git
+Ensure-WindowsPrerequisites
 
 if (-not (Test-Path ".env")) {
   Write-Host "==> Criando .env a partir de .env.example"
@@ -122,7 +80,7 @@ for ($i = 1; $i -le 60; $i++) {
   }
 }
 if (-not $ok) {
-  Write-Host "AVISO: API ainda nao respondeu - confira licenca no painel ou logs da API."
+  Write-Host "AVISO: API ainda nao respondeu - ative a licenca no painel (/licenca)."
 }
 
 Write-Host "==> Seed do admin (se ainda nao existir)..."
@@ -141,4 +99,5 @@ Write-Host " Instalacao concluida."
 Write-Host " Para abrir o painel em JANELA:"
 Write-Host "   - Clique duas vezes em: Iniciar-Windows.bat"
 Write-Host " Login: admin@example.com / admin123"
+Write-Host " Licenca: abra o painel e ative em /licenca"
 Write-Host "=============================================="

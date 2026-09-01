@@ -3,6 +3,51 @@
 function Refresh-PathEnv {
   $env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" +
     [System.Environment]::GetEnvironmentVariable("Path", "User")
+  $extraPaths = @(
+    (Join-Path ${env:ProgramFiles} "Docker\Docker\resources\bin"),
+    (Join-Path ${env:ProgramFiles} "Git\cmd"),
+    (Join-Path ${env:ProgramFiles(x86)} "Git\cmd"),
+    (Join-Path ${env:ProgramFiles} "nodejs")
+  )
+  foreach ($dir in $extraPaths) {
+    if ($dir -and (Test-Path $dir) -and $env:Path -notlike "*$dir*") {
+      $env:Path = "$dir;$env:Path"
+    }
+  }
+}
+
+function Ensure-Winget {
+  Refresh-PathEnv
+  if (Test-CommandExists "winget") {
+    return
+  }
+  Write-Host "==> winget nao encontrado. Tentando instalar App Installer..."
+  try {
+    $bundle = Join-Path $env:TEMP "Microsoft.DesktopAppInstaller.msixbundle"
+    Invoke-WebRequest -Uri "https://aka.ms/getwinget" -OutFile $bundle -UseBasicParsing
+    Add-AppxPackage -Path $bundle | Out-Null
+  } catch {
+    Write-Host "ERRO: winget e obrigatorio para instalar Docker, Node e Git automaticamente."
+    Write-Host "    Instale 'App Installer' na Microsoft Store e rode INSTALAR-Windows.bat de novo."
+    exit 1
+  }
+  Refresh-PathEnv
+  if (-not (Test-CommandExists "winget")) {
+    Write-Host "ERRO: winget ainda nao disponivel apos instalar App Installer."
+    Write-Host "    Reinicie o PC e rode INSTALAR-Windows.bat de novo."
+    exit 1
+  }
+}
+
+function Install-PackageWithWinget([string]$Id, [string]$Label) {
+  Ensure-Winget
+  Write-Host "==> Instalando $Label via winget ($Id)..."
+  winget install -e --id $Id --accept-package-agreements --accept-source-agreements --disable-interactivity
+  if ($LASTEXITCODE -gt 1) {
+    Write-Host "ERRO: winget falhou ao instalar $Label (codigo $LASTEXITCODE)."
+    exit 1
+  }
+  Refresh-PathEnv
 }
 
 function Test-CommandExists([string]$Name) {
@@ -33,18 +78,7 @@ function Test-DockerDaemonRunning {
 }
 
 function Install-DockerDesktopWithWinget {
-  if (-not (Test-CommandExists "winget")) {
-    Write-Host "ERRO: winget nao encontrado. Instale o App Installer da Microsoft Store."
-    Write-Host "Ou baixe o Docker Desktop: https://www.docker.com/products/docker-desktop/"
-    return $false
-  }
-  Write-Host "==> Instalando Docker Desktop via winget..."
-  winget install -e --id Docker.DockerDesktop --accept-package-agreements --accept-source-agreements --disable-interactivity
-  if ($LASTEXITCODE -gt 1) {
-    Write-Host "ERRO: winget falhou ao instalar Docker Desktop (codigo $LASTEXITCODE)."
-    return $false
-  }
-  Refresh-PathEnv
+  Install-PackageWithWinget "Docker.DockerDesktop" "Docker Desktop"
   return $true
 }
 
@@ -83,9 +117,7 @@ function Ensure-DockerReady {
   $hasDockerCli = Test-CommandExists "docker"
 
   if (-not $hasDockerCli -and -not $desktopExe) {
-    if (-not (Install-DockerDesktopWithWinget)) {
-      exit 1
-    }
+    Install-PackageWithWinget "Docker.DockerDesktop" "Docker Desktop"
     $desktopExe = Find-DockerDesktopExe
     Refresh-PathEnv
     $hasDockerCli = Test-CommandExists "docker"
@@ -99,9 +131,7 @@ function Ensure-DockerReady {
   Write-Host "==> Docker instalado, mas ainda nao esta Running..."
   if (-not $desktopExe) {
     Write-Host "    Tentando instalar Docker Desktop novamente..."
-    if (-not (Install-DockerDesktopWithWinget)) {
-      exit 1
-    }
+    Install-PackageWithWinget "Docker.DockerDesktop" "Docker Desktop"
     $desktopExe = Find-DockerDesktopExe
     Refresh-PathEnv
   }
