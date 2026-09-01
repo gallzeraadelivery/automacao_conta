@@ -8,6 +8,8 @@ Set-Location $Root
 
 Write-Host "==> Uber Automation — instalação (Windows)"
 Write-Host "    Pasta: $Root"
+$psVersion = $PSVersionTable.PSVersion.ToString()
+Write-Host "    PowerShell: $psVersion"
 Write-Host ""
 
 function Test-Command([string]$Name) {
@@ -27,6 +29,10 @@ function Install-WithWinget([string]$Id, [string]$Label) {
   }
   Write-Host "==> Instalando $Label via winget ($Id)..."
   winget install -e --id $Id --accept-package-agreements --accept-source-agreements --disable-interactivity
+  if ($LASTEXITCODE -gt 1) {
+    Write-Host "ERRO: winget falhou ao instalar $Label (código $LASTEXITCODE)."
+    exit 1
+  }
   Refresh-Path
 }
 
@@ -155,14 +161,33 @@ $envText = Get-Content ".env" -Raw
 if ($envText -match '(?m)^LICENSE_KEY=GD-XXXX-XXXX\s*$' -or $envText -notmatch '(?m)^LICENSE_KEY=') {
   Write-Host ""
   Write-Host "==> Chave de licença (formato GD-XXXX-XXXX)"
-  Write-Host "    Gere em https://automacao.gdapps.online ou configure depois no .env"
+  Write-Host "    Gere em https://automacao.gdapps.online"
+  Write-Host "    Pressione Enter sem digitar para instalar sem licença (configure depois no .env)."
   $licenseInput = Read-Host "LICENSE_KEY"
-  $licenseInput = ($licenseInput ?? "").Trim().ToUpperInvariant()
+  if ($null -eq $licenseInput) { $licenseInput = "" }
+  $licenseInput = $licenseInput.Trim().ToUpperInvariant()
   if ($licenseInput) {
     if ($envText -match '(?m)^LICENSE_KEY=') {
       $envText = $envText -replace '(?m)^LICENSE_KEY=.*$', "LICENSE_KEY=$licenseInput"
     } else {
       $envText += "`nLICENSE_KEY=$licenseInput"
+    }
+    if ($envText -notmatch '(?m)^LICENSE_ENABLED=') {
+      $envText += "`nLICENSE_ENABLED=true"
+    } else {
+      $envText = $envText -replace '(?m)^LICENSE_ENABLED=.*$', 'LICENSE_ENABLED=true'
+    }
+    Set-Content -Path ".env" -Value $envText -NoNewline
+  } else {
+    Write-Host "    Sem chave agora — desabilitando verificação de licença (LICENSE_ENABLED=false)."
+    Write-Host "    Depois edite .env com LICENSE_KEY=GD-XXXX-XXXX e LICENSE_ENABLED=true"
+    if ($envText -match '(?m)^LICENSE_ENABLED=') {
+      $envText = $envText -replace '(?m)^LICENSE_ENABLED=.*$', 'LICENSE_ENABLED=false'
+    } else {
+      $envText += "`nLICENSE_ENABLED=false"
+    }
+    if ($envText -match '(?m)^LICENSE_KEY=GD-XXXX-XXXX') {
+      $envText = $envText -replace '(?m)^LICENSE_KEY=GD-XXXX-XXXX\s*$', 'LICENSE_KEY='
     }
     Set-Content -Path ".env" -Value $envText -NoNewline
   }
