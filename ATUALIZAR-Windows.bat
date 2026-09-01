@@ -1,7 +1,7 @@
 @echo off
 REM Clique duas vezes para ATUALIZAR (git pull + rebuild Docker).
 cd /d "%~dp0"
-echo Uber Automation — atualizar (pull + rebuild)
+echo Uber Automation - atualizar (pull + rebuild)
 echo.
 
 where pwsh >nul 2>&1
