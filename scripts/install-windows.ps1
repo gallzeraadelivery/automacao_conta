@@ -55,6 +55,7 @@ if ($nodeMajor -lt 20) {
 Write-Host "    Node $(node -v)"
 
 Ensure-Pnpm
+Ensure-Git
 
 if (-not (Test-Path ".env")) {
   Write-Host "==> Criando .env a partir de .env.example"

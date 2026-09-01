@@ -193,6 +193,10 @@ echo "    Docker OK"
 ensure_node_user
 ensure_pnpm
 
+if ! command -v git >/dev/null 2>&1; then
+  echo "AVISO: git nao encontrado. Para ATUALIZAR depois, instale Xcode CLT ou: brew install git"
+fi
+
 # --- .env / chave ---
 if [[ ! -f .env ]]; then
   echo "==> Criando .env a partir de .env.example"

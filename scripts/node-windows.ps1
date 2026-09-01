@@ -64,3 +64,24 @@ function Ensure-Pnpm {
 
   Write-Host "    pnpm $(pnpm -v)"
 }
+
+function Ensure-Git {
+  Refresh-PathEnv
+  if (Test-CommandExists "git") {
+    Write-Host "    Git OK"
+    return
+  }
+  if (-not (Test-CommandExists "winget")) {
+    Write-Host "AVISO: Git nao encontrado. Para ATUALIZAR depois, instale:"
+    Write-Host "    https://git-scm.com/download/win"
+    return
+  }
+  Write-Host "==> Instalando Git for Windows (para ATUALIZAR depois)..."
+  winget install -e --id Git.Git --accept-package-agreements --accept-source-agreements --disable-interactivity
+  Refresh-PathEnv
+  if (Test-CommandExists "git") {
+    Write-Host "    Git OK"
+  } else {
+    Write-Host "AVISO: Git nao ficou no PATH. Instale manualmente se for usar git pull."
+  }
+}
