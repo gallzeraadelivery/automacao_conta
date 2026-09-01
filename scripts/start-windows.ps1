@@ -10,7 +10,7 @@ function Refresh-Path {
 Refresh-Path
 
 if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
-  Write-Host "Docker não encontrado. Rode INSTALAR-Windows.bat primeiro."
+  Write-Host "Docker nao encontrado. Rode INSTALAR-Windows.bat primeiro."
   exit 1
 }
 
@@ -30,7 +30,7 @@ try {
     Start-Sleep -Seconds 2
   }
   if (-not $ready) {
-    Write-Host "ERRO: Docker ainda não está Running."
+    Write-Host "ERRO: Docker ainda nao esta Running."
     exit 1
   }
 }
@@ -49,7 +49,7 @@ for ($i = 1; $i -le 60; $i++) {
   }
 }
 if (-not $webOk) {
-  Write-Host "AVISO: painel ainda não respondeu em :3000"
+  Write-Host "AVISO: painel ainda nao respondeu em :3000"
 }
 
 $electronBin = "apps\desktop-shell\node_modules\.bin\electron.cmd"
@@ -63,7 +63,7 @@ if (-not (Test-Path "apps\desktop-shell\node_modules\electron")) {
     npm install
     Pop-Location
   } else {
-    Write-Host "ERRO: pnpm/npm não encontrados. Rode INSTALAR-Windows.bat de novo."
+    Write-Host "ERRO: pnpm/npm nao encontrados. Rode INSTALAR-Windows.bat de novo."
     exit 1
   }
 }
@@ -78,5 +78,5 @@ if (Get-Command pnpm -ErrorAction SilentlyContinue) {
   pnpm start
   exit $LASTEXITCODE
 }
-Write-Host "ERRO: Electron não encontrado."
+Write-Host "ERRO: Electron nao encontrado."
 exit 1

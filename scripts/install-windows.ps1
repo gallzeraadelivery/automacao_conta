@@ -1,15 +1,13 @@
-# Instalação automática no Windows.
-# Instala o que faltar (Docker Desktop, Node LTS via winget) e sobe o stack.
-# Preferir: clique duplo em INSTALAR-Windows.bat
+# Instalacao automatica no Windows (compativel com PowerShell 5.1).
+# Use: clique duplo em INSTALAR-Windows.bat
 
 $ErrorActionPreference = "Stop"
 $Root = Resolve-Path (Join-Path $PSScriptRoot "..")
 Set-Location $Root
 
-Write-Host "==> Uber Automation — instalação (Windows)"
+Write-Host "==> Uber Automation - instalacao (Windows)"
 Write-Host "    Pasta: $Root"
-$psVersion = $PSVersionTable.PSVersion.ToString()
-Write-Host "    PowerShell: $psVersion"
+Write-Host "    PowerShell: $($PSVersionTable.PSVersion)"
 Write-Host ""
 
 function Test-Command([string]$Name) {
@@ -23,14 +21,14 @@ function Refresh-Path {
 
 function Install-WithWinget([string]$Id, [string]$Label) {
   if (-not (Test-Command "winget")) {
-    Write-Host "ERRO: winget não encontrado. Atualize o Windows / App Installer e tente de novo."
+    Write-Host "ERRO: winget nao encontrado. Atualize o Windows / App Installer."
     Write-Host "Ou instale manualmente: $Label"
     exit 1
   }
   Write-Host "==> Instalando $Label via winget ($Id)..."
   winget install -e --id $Id --accept-package-agreements --accept-source-agreements --disable-interactivity
   if ($LASTEXITCODE -gt 1) {
-    Write-Host "ERRO: winget falhou ao instalar $Label (código $LASTEXITCODE)."
+    Write-Host "ERRO: winget falhou ao instalar $Label (codigo $LASTEXITCODE)."
     exit 1
   }
   Refresh-Path
@@ -41,7 +39,7 @@ function Wait-DockerReady([int]$MaxAttempts = 90) {
     try {
       docker info 2>$null | Out-Null
       if ($LASTEXITCODE -eq 0) {
-        Write-Host "    Docker OK (${i} tentativas)"
+        Write-Host "    Docker OK ($i tentativas)"
         return $true
       }
     } catch { }
@@ -50,22 +48,20 @@ function Wait-DockerReady([int]$MaxAttempts = 90) {
   return $false
 }
 
-# --- Docker Desktop ---
 Refresh-Path
 if (-not (Test-Command "docker")) {
   Install-WithWinget "Docker.DockerDesktop" "Docker Desktop"
   Refresh-Path
   if (-not (Test-Command "docker")) {
     Write-Host ""
-    Write-Host "Docker Desktop foi instalado, mas o comando 'docker' ainda não está no PATH."
-    Write-Host "1) Abra o Docker Desktop pelo menu Iniciar"
-    Write-Host "2) Complete o setup (WSL2 se pedir) e REINICIE o PC se solicitado"
-    Write-Host "3) Rode de novo: INSTALAR-Windows.bat"
+    Write-Host "Docker Desktop foi instalado, mas o comando docker ainda nao esta no PATH."
+    Write-Host "1. Abra o Docker Desktop pelo menu Iniciar"
+    Write-Host "2. Complete o setup (WSL2 se pedir) e REINICIE o PC se solicitado"
+    Write-Host "3. Rode de novo: INSTALAR-Windows.bat"
     exit 1
   }
 }
 
-# Sobe o Docker Desktop se o daemon estiver parado
 try {
   docker info 2>$null | Out-Null
   $dockerOk = ($LASTEXITCODE -eq 0)
@@ -82,13 +78,12 @@ if (-not $dockerOk) {
     Start-Process "Docker Desktop" -ErrorAction SilentlyContinue
   }
   if (-not (Wait-DockerReady 90)) {
-    Write-Host "ERRO: Docker Desktop instalado, mas ainda não está Running."
-    Write-Host "Abra o Docker Desktop, aceite WSL2/reinício se pedir, e rode INSTALAR-Windows.bat de novo."
+    Write-Host "ERRO: Docker Desktop instalado, mas ainda nao esta Running."
+    Write-Host "Abra o Docker Desktop, aceite WSL2/reinicio se pedir, e rode INSTALAR-Windows.bat de novo."
     exit 1
   }
 }
 
-# --- Node.js 20+ ---
 Refresh-Path
 $needNode = $false
 if (-not (Test-Command "node")) {
@@ -102,19 +97,18 @@ if ($needNode) {
   Install-WithWinget "OpenJS.NodeJS.LTS" "Node.js LTS"
   Refresh-Path
   if (-not (Test-Command "node")) {
-    Write-Host "ERRO: Node instalado, mas ainda não está no PATH. Feche e abra o PowerShell / rode INSTALAR-Windows.bat de novo."
+    Write-Host "ERRO: Node instalado, mas ainda nao esta no PATH. Rode INSTALAR-Windows.bat de novo."
     exit 1
   }
 }
 
 $nodeMajor = [int]((node -p "process.versions.node.split('.')[0]"))
 if ($nodeMajor -lt 20) {
-  Write-Host "ERRO: Node >= 20 necessário (atual: $(node -v))"
+  Write-Host "ERRO: Node >= 20 necessario (atual: $(node -v))"
   exit 1
 }
 Write-Host "    Node $(node -v)"
 
-# --- pnpm ---
 if (-not (Test-Command "pnpm")) {
   Write-Host "==> Habilitando pnpm (corepack)..."
   try {
@@ -127,12 +121,11 @@ if (-not (Test-Command "pnpm")) {
 }
 
 if (-not (Test-Command "pnpm")) {
-  Write-Host "ERRO: pnpm não ficou disponível."
+  Write-Host "ERRO: pnpm nao ficou disponivel."
   exit 1
 }
 Write-Host "    pnpm $(pnpm -v)"
 
-# --- .env / chave ---
 if (-not (Test-Path ".env")) {
   Write-Host "==> Criando .env a partir de .env.example"
   Copy-Item ".env.example" ".env"
@@ -146,7 +139,6 @@ if (-not (Test-Path ".env")) {
     Set-Content ".env" -NoNewline
 }
 
-# Garante Uber real (evita mock-server inexistente no compose padrão)
 $envText = Get-Content ".env" -Raw
 if ($envText -match '(?m)^AUTOMATION_TARGET=mock\s*$') {
   Write-Host "==> Ajustando AUTOMATION_TARGET=production no .env"
@@ -160,9 +152,9 @@ if ($envText -notmatch '(?m)^AUTOMATION_TARGET=') {
 $envText = Get-Content ".env" -Raw
 if ($envText -match '(?m)^LICENSE_KEY=GD-XXXX-XXXX\s*$' -or $envText -notmatch '(?m)^LICENSE_KEY=') {
   Write-Host ""
-  Write-Host "==> Chave de licença (formato GD-XXXX-XXXX)"
+  Write-Host "==> Chave de licenca (formato GD-XXXX-XXXX)"
   Write-Host "    Gere em https://automacao.gdapps.online"
-  Write-Host "    Pressione Enter sem digitar para instalar sem licença (configure depois no .env)."
+  Write-Host "    Pressione Enter sem digitar para instalar sem licenca (configure depois no .env)."
   $licenseInput = Read-Host "LICENSE_KEY"
   if ($null -eq $licenseInput) { $licenseInput = "" }
   $licenseInput = $licenseInput.Trim().ToUpperInvariant()
@@ -179,8 +171,8 @@ if ($envText -match '(?m)^LICENSE_KEY=GD-XXXX-XXXX\s*$' -or $envText -notmatch '
     }
     Set-Content -Path ".env" -Value $envText -NoNewline
   } else {
-    Write-Host "    Sem chave agora — desabilitando verificação de licença (LICENSE_ENABLED=false)."
-    Write-Host "    Depois edite .env com LICENSE_KEY=GD-XXXX-XXXX e LICENSE_ENABLED=true"
+    Write-Host "    Sem chave agora - desabilitando licenca (LICENSE_ENABLED=false)."
+    Write-Host "    Depois edite .env com LICENSE_KEY e LICENSE_ENABLED=true"
     if ($envText -match '(?m)^LICENSE_ENABLED=') {
       $envText = $envText -replace '(?m)^LICENSE_ENABLED=.*$', 'LICENSE_ENABLED=false'
     } else {
@@ -199,7 +191,7 @@ if (-not (Test-Path ".secrets.key")) {
   Set-Content -Path ".secrets.key" -Value $key -NoNewline
 }
 
-Write-Host "==> Instalando dependências do monorepo (painel em janela)..."
+Write-Host "==> Instalando dependencias do monorepo (painel em janela)..."
 try {
   pnpm install --frozen-lockfile
 } catch {
@@ -208,8 +200,12 @@ try {
 
 Write-Host "==> Subindo stack Docker (postgres, redis, api, web, worker)..."
 docker compose -f infra/docker/docker-compose.yml up -d --build
+if ($LASTEXITCODE -ne 0) {
+  Write-Host "ERRO: docker compose falhou (codigo $LASTEXITCODE)."
+  exit 1
+}
 
-Write-Host "==> Aguardando API ficar saudável..."
+Write-Host "==> Aguardando API ficar saudavel..."
 $ok = $false
 for ($i = 1; $i -le 60; $i++) {
   try {
@@ -224,23 +220,23 @@ for ($i = 1; $i -le 60; $i++) {
   }
 }
 if (-not $ok) {
-  Write-Host "AVISO: API ainda não respondeu — confira: docker compose -f infra/docker/docker-compose.yml logs api"
+  Write-Host "AVISO: API ainda nao respondeu - confira licenca no .env ou logs da API."
 }
 
-Write-Host "==> Seed do admin (se ainda não existir)..."
+Write-Host "==> Seed do admin (se ainda nao existir)..."
 try { pnpm db:migrate } catch { }
 $env:SEED_ADMIN_EMAIL = if ($env:SEED_ADMIN_EMAIL) { $env:SEED_ADMIN_EMAIL } else { "admin@example.com" }
 $env:SEED_ADMIN_PASSWORD = if ($env:SEED_ADMIN_PASSWORD) { $env:SEED_ADMIN_PASSWORD } else { "admin123" }
 try {
   pnpm db:seed
 } catch {
-  Write-Host "    (seed ignorado — provavelmente já rodou)"
+  Write-Host "    (seed ignorado - provavelmente ja rodou)"
 }
 
 Write-Host ""
 Write-Host "=============================================="
-Write-Host " Instalação concluída."
+Write-Host " Instalacao concluida."
 Write-Host " Para abrir o painel em JANELA:"
-Write-Host "   • Clique duas vezes em: Iniciar-Windows.bat"
+Write-Host "   - Clique duas vezes em: Iniciar-Windows.bat"
 Write-Host " Login: admin@example.com / admin123"
 Write-Host "=============================================="
