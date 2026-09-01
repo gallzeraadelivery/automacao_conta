@@ -577,22 +577,13 @@ export async function deleteApplicant(companyId: string, applicantId: string): P
 }
 
 /**
- * Apaga todos os Veriff (`NON_SOCURE_PROVIDER`). Socure permanece.
- * E-mails são gravados em `used_emails` antes do DELETE.
- *
- * Bulk (não chama deleteApplicant em loop): o loop antigo varria a pasta
- * inteira de screenshots por motorista e estourava timeout no browser.
+ * Bulk purge: jobs, audit unlink, DELETE applicants, browser profiles + screenshots.
  */
-export async function purgeVeriffApplicants(
+async function purgeApplicantsBulk(
   companyId: string,
+  rows: { id: string; email: string }[],
+  emailSource: string,
 ): Promise<{ deleted: number; emailsReserved: number }> {
-  const rows = await db
-    .select({ id: applicants.id, email: applicants.email })
-    .from(applicants)
-    .where(
-      and(eq(applicants.companyId, companyId), eq(applicants.pauseReason, "NON_SOCURE_PROVIDER")),
-    );
-
   if (rows.length === 0) {
     return { deleted: 0, emailsReserved: 0 };
   }
@@ -603,28 +594,21 @@ export async function purgeVeriffApplicants(
   const emailsReserved = await recordUsedEmails(
     companyId,
     rows.map((row) => row.email),
-    "veriff_purge",
+    emailSource,
   );
 
-  // Cancela jobs Bull (best-effort) sem bloquear o purge.
-  await Promise.all(
-    ids.map((id) => cancelAutomationJobsForApplicant(id).catch(() => 0)),
-  );
+  await Promise.all(ids.map((id) => cancelAutomationJobsForApplicant(id).catch(() => 0)));
 
-  // audit_logs.applicant_id tem FK sem ON DELETE → precisa desvincular antes.
   await db
     .update(auditLogs)
     .set({ applicantId: null })
     .where(inArray(auditLogs.applicantId, ids));
 
-  // CASCADE cobre email_accounts / browser_profiles / driver_deliveries.
   await db
     .delete(applicants)
     .where(and(eq(applicants.companyId, companyId), inArray(applicants.id, ids)));
 
-  // Limpeza de disco em uma passada (não readdir N vezes).
-  const profilesRoot =
-    env.BROWSER_PROFILES_STORAGE_PATH || defaultBrowserProfilesRoot();
+  const profilesRoot = env.BROWSER_PROFILES_STORAGE_PATH || defaultBrowserProfilesRoot();
   await Promise.all(
     ids.map(async (applicantId) => {
       const profileDir = await resolveApplicantProfileDir(profilesRoot, applicantId);
@@ -653,6 +637,67 @@ export async function purgeVeriffApplicants(
   }
 
   return { deleted: ids.length, emailsReserved };
+}
+
+/**
+ * Apaga todos os Veriff (`NON_SOCURE_PROVIDER`). Socure permanece.
+ * E-mails são gravados em `used_emails` antes do DELETE.
+ */
+export async function purgeVeriffApplicants(
+  companyId: string,
+): Promise<{ deleted: number; emailsReserved: number }> {
+  const rows = await db
+    .select({ id: applicants.id, email: applicants.email })
+    .from(applicants)
+    .where(
+      and(eq(applicants.companyId, companyId), eq(applicants.pauseReason, "NON_SOCURE_PROVIDER")),
+    );
+
+  return purgeApplicantsBulk(companyId, rows, "veriff_purge");
+}
+
+/**
+ * Apaga motoristas classificados como Socure (foto ou CNH).
+ * Veriff permanece. Remove perfis, cookies e screenshots — use após baixar cookies.
+ */
+export async function purgeSocureApplicants(
+  companyId: string,
+): Promise<{ deleted: number; emailsReserved: number }> {
+  const rows = await db
+    .select({ id: applicants.id, email: applicants.email })
+    .from(applicants)
+    .where(
+      and(
+        eq(applicants.companyId, companyId),
+        or(
+          eq(applicants.profilePhotoProvider, "SOCURE"),
+          eq(applicants.driverLicenseProvider, "SOCURE"),
+        ),
+      ),
+    );
+
+  return purgeApplicantsBulk(companyId, rows, "socure_purge");
+}
+
+/**
+ * Apaga motoristas selecionados (IDs). Remove perfis, cookies e screenshots.
+ */
+export async function deleteApplicantsBatch(
+  companyId: string,
+  applicantIds: string[],
+): Promise<{ deleted: number; emailsReserved: number; notFound: number }> {
+  const uniqueIds = [...new Set(applicantIds.map((id) => id.trim()).filter(Boolean))];
+  if (uniqueIds.length === 0) {
+    throw new HttpError(400, "APPLICANT_IDS_REQUIRED", "Informe ao menos um motorista");
+  }
+
+  const rows = await db
+    .select({ id: applicants.id, email: applicants.email })
+    .from(applicants)
+    .where(and(eq(applicants.companyId, companyId), inArray(applicants.id, uniqueIds)));
+
+  const result = await purgeApplicantsBulk(companyId, rows, "batch_delete");
+  return { ...result, notFound: uniqueIds.length - rows.length };
 }
 
 export interface UberCookiesExport {

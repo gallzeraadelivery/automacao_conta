@@ -1,0 +1,3 @@
+automacao.gdapps.online {
+  reverse_proxy license-server:8090
+}

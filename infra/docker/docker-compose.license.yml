@@ -1,0 +1,37 @@
+# Servidor central de licenças — deploy em automacao.gdapps.online (VPS 2.24.124.218)
+services:
+  license-server:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.license-server
+    restart: unless-stopped
+    ports:
+      - "8090:8090"
+    environment:
+      NODE_ENV: production
+      PORT: 8090
+      LICENSE_DB_PATH: /app/data/licenses.sqlite
+      LICENSE_ADMIN_USER: ${LICENSE_ADMIN_USER:-admin}
+      LICENSE_ADMIN_PASSWORD: ${LICENSE_ADMIN_PASSWORD:?defina LICENSE_ADMIN_PASSWORD}
+      LICENSE_SESSION_SECRET: ${LICENSE_SESSION_SECRET:?defina LICENSE_SESSION_SECRET}
+      LICENSE_CORS_ORIGIN: "*"
+    volumes:
+      - license_data:/app/data
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile.license:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - license-server
+
+volumes:
+  license_data:
+  caddy_data:
+  caddy_config:

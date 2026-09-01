@@ -9,6 +9,7 @@ import { formatProxyGeoLabel } from "@/lib/proxyGeo";
 import { StartAutomationModal } from "./StartAutomationModal";
 import { StartBatchModal } from "./StartBatchModal";
 import { GenerateBatchModal } from "./GenerateBatchModal";
+import { DeleteSelectedModal, type DeleteSelectedApplicant } from "./DeleteSelectedModal";
 
 interface ApplicantRow {
   id: string;
@@ -83,14 +84,6 @@ const STARTABLE_STATUSES = new Set([
   "AWAITING_HUMAN_ACTION",
 ]);
 
-const BATCH_STARTABLE_STATUSES = new Set([
-  "NEW",
-  "CONSENT_PENDING",
-  "READY_TO_START",
-  "FAILED",
-  "CANCELLED",
-]);
-
 /** Status com página de log útil (inclui IN_PROGRESS para acompanhar ao vivo). */
 const LOGGABLE_STATUSES = new Set(["FAILED", "AWAITING_HUMAN_ACTION", "IN_PROGRESS"]);
 
@@ -102,7 +95,9 @@ export function ApplicantsList() {
   const [selected, setSelected] = useState<ApplicantRow | null>(null);
   const [batchOpen, setBatchOpen] = useState(false);
   const [generateOpen, setGenerateOpen] = useState(false);
+  const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
+  const [checkedMeta, setCheckedMeta] = useState<Map<string, DeleteSelectedApplicant>>(new Map());
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
   const [openingBrowserId, setOpeningBrowserId] = useState<string | null>(null);
@@ -110,6 +105,7 @@ export function ApplicantsList() {
   const [stoppingId, setStoppingId] = useState<string | null>(null);
   const [stoppingAll, setStoppingAll] = useState(false);
   const [purgingVeriff, setPurgingVeriff] = useState(false);
+  const [purgingSocure, setPurgingSocure] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [livePolling, setLivePolling] = useState(false);
   const [searchInput, setSearchInput] = useState("");
@@ -150,35 +146,74 @@ export function ApplicantsList() {
     [page, pageSize, status, pauseReason, q],
   );
 
-  const batchCandidates = useMemo(
+  const allPageSelected =
+    applicants.length > 0 && applicants.every((a) => checkedIds.has(a.id));
+
+  const selectedForDelete = useMemo(
     () =>
-      applicants.filter(
-        (a) =>
-          BATCH_STARTABLE_STATUSES.has(a.status) && a.pauseReason !== "REFUSED",
+      [...checkedIds].map(
+        (id) =>
+          checkedMeta.get(id) ?? {
+            id,
+            fullName: `Motorista ${id.slice(0, 8)}…`,
+            status: "—",
+          },
       ),
-    [applicants],
+    [checkedIds, checkedMeta],
   );
 
-  const allBatchSelected =
-    batchCandidates.length > 0 && batchCandidates.every((a) => checkedIds.has(a.id));
-
-  function toggleCheck(id: string) {
+  function toggleCheck(applicant: ApplicantRow) {
     setCheckedIds((prev) => {
       const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
+      if (next.has(applicant.id)) next.delete(applicant.id);
+      else next.add(applicant.id);
+      return next;
+    });
+    setCheckedMeta((prev) => {
+      const next = new Map(prev);
+      if (next.has(applicant.id)) {
+        next.delete(applicant.id);
+      } else {
+        next.set(applicant.id, {
+          id: applicant.id,
+          fullName: applicant.fullName,
+          email: applicant.email,
+          status: applicant.status,
+        });
+      }
       return next;
     });
   }
 
-  function toggleSelectAllBatch() {
+  function toggleSelectAllPage() {
+    if (allPageSelected) {
+      setCheckedIds((prev) => {
+        const next = new Set(prev);
+        for (const applicant of applicants) next.delete(applicant.id);
+        return next;
+      });
+      setCheckedMeta((prev) => {
+        const next = new Map(prev);
+        for (const applicant of applicants) next.delete(applicant.id);
+        return next;
+      });
+      return;
+    }
     setCheckedIds((prev) => {
       const next = new Set(prev);
-      if (allBatchSelected) {
-        for (const applicant of batchCandidates) next.delete(applicant.id);
-        return next;
+      for (const applicant of applicants) next.add(applicant.id);
+      return next;
+    });
+    setCheckedMeta((prev) => {
+      const next = new Map(prev);
+      for (const applicant of applicants) {
+        next.set(applicant.id, {
+          id: applicant.id,
+          fullName: applicant.fullName,
+          email: applicant.email,
+          status: applicant.status,
+        });
       }
-      for (const applicant of batchCandidates) next.add(applicant.id);
       return next;
     });
   }
@@ -389,6 +424,40 @@ export function ApplicantsList() {
     }
   }
 
+  async function handlePurgeSocure() {
+    if (
+      !window.confirm(
+        "Apagar TODOS os Socure?\n\nVeriff permanece. Use depois de baixar os cookies. Perfis, cookies e screenshots desses motoristas são removidos. E-mails ficam gravados e não poderão ser reimportados.",
+      )
+    ) {
+      return;
+    }
+    setActionError(null);
+    setPurgingSocure(true);
+    try {
+      const result = await apiRequest<{ deleted: number; emailsReserved: number }>(
+        "/api/applicants/purge-socure",
+        { method: "POST", body: JSON.stringify({}) },
+      );
+      if (result.success) {
+        window.alert(
+          `Socure apagados: ${result.data.deleted}. E-mails reservados: ${result.data.emailsReserved}.`,
+        );
+        await load({ silent: true });
+      } else {
+        const msg = result.error.message || result.error.code || "Falha ao apagar Socure";
+        setActionError(msg);
+        window.alert(`Erro ao apagar Socure: ${msg}`);
+      }
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      setActionError(msg);
+      window.alert(`Erro ao apagar Socure: ${msg}`);
+    } finally {
+      setPurgingSocure(false);
+    }
+  }
+
   return (
     <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
@@ -410,11 +479,29 @@ export function ApplicantsList() {
           </button>
           <button
             type="button"
+            disabled={checkedIds.size === 0}
+            onClick={() => setDeleteModalOpen(true)}
+            className="rounded-md border border-red-400 bg-red-50 px-3 py-1.5 text-xs font-medium text-red-700 hover:bg-red-100 disabled:opacity-50"
+            title="Apaga os motoristas marcados na lista"
+          >
+            Apagar selecionados{checkedIds.size > 0 ? ` (${checkedIds.size})` : ""}
+          </button>
+          <button
+            type="button"
             onClick={() => setBatchOpen(true)}
             className="rounded-md bg-brand-500 px-3 py-1.5 text-xs font-medium text-white hover:bg-brand-600"
           >
             Start lote
             {checkedIds.size > 0 ? ` (${checkedIds.size})` : ""}
+          </button>
+          <button
+            type="button"
+            disabled={purgingSocure}
+            onClick={() => void handlePurgeSocure()}
+            className="rounded-md border border-violet-400 bg-violet-50 px-3 py-1.5 text-xs font-medium text-violet-800 hover:bg-violet-100 disabled:opacity-50"
+            title="Apaga motoristas Socure após download; Veriff fica; libera cache de perfis"
+          >
+            {purgingSocure ? "Apagando Socure…" : "Apagar todos os Socure"}
           </button>
           <button
             type="button"
@@ -539,10 +626,10 @@ export function ApplicantsList() {
               <th className="py-2 pr-2">
                 <input
                   type="checkbox"
-                  checked={allBatchSelected}
-                  onChange={toggleSelectAllBatch}
-                  title="Selecionar elegíveis desta página"
-                  aria-label="Selecionar elegíveis desta página"
+                  checked={allPageSelected}
+                  onChange={toggleSelectAllPage}
+                  title="Selecionar todos desta página"
+                  aria-label="Selecionar todos desta página"
                 />
               </th>
               <th className="py-2">ID externo</th>
@@ -558,17 +645,12 @@ export function ApplicantsList() {
             {applicants.map((applicant) => (
               <tr key={applicant.id}>
                 <td className="py-2 pr-2">
-                  {BATCH_STARTABLE_STATUSES.has(applicant.status) &&
-                  applicant.pauseReason !== "REFUSED" ? (
-                    <input
-                      type="checkbox"
-                      checked={checkedIds.has(applicant.id)}
-                      onChange={() => toggleCheck(applicant.id)}
-                      aria-label={`Selecionar ${applicant.fullName}`}
-                    />
-                  ) : (
-                    <span className="inline-block w-4" />
-                  )}
+                  <input
+                    type="checkbox"
+                    checked={checkedIds.has(applicant.id)}
+                    onChange={() => toggleCheck(applicant)}
+                    aria-label={`Selecionar ${applicant.fullName}`}
+                  />
                 </td>
                 <td className="py-2 text-slate-500">{applicant.externalId}</td>
                 <td className="py-2 text-slate-800">
@@ -739,6 +821,18 @@ export function ApplicantsList() {
           onClose={() => setGenerateOpen(false)}
           onStarted={() => {
             void load();
+          }}
+        />
+      )}
+
+      {deleteModalOpen && selectedForDelete.length > 0 && (
+        <DeleteSelectedModal
+          selected={selectedForDelete}
+          onClose={() => setDeleteModalOpen(false)}
+          onDeleted={() => {
+            setCheckedIds(new Set());
+            setCheckedMeta(new Map());
+            void load({ silent: true });
           }}
         />
       )}

@@ -15,6 +15,7 @@
     "@uber-automation/credential-vault": "workspace:*",
     "@uber-automation/database": "workspace:*",
     "@uber-automation/email-service": "workspace:*",
+    "@uber-automation/license-client": "workspace:*",
     "@uber-automation/mobile-shell": "workspace:*",
     "@uber-automation/platform-adapters": "workspace:*",
     "@uber-automation/security": "workspace:*",

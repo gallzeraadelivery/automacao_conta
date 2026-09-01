@@ -151,6 +151,23 @@ if ($envText -notmatch '(?m)^AUTOMATION_TARGET=') {
   Add-Content -Path ".env" -Value "`nAUTOMATION_TARGET=production"
 }
 
+$envText = Get-Content ".env" -Raw
+if ($envText -match '(?m)^LICENSE_KEY=GD-XXXX-XXXX\s*$' -or $envText -notmatch '(?m)^LICENSE_KEY=') {
+  Write-Host ""
+  Write-Host "==> Chave de licença (formato GD-XXXX-XXXX)"
+  Write-Host "    Gere em https://automacao.gdapps.online ou configure depois no .env"
+  $licenseInput = Read-Host "LICENSE_KEY"
+  $licenseInput = ($licenseInput ?? "").Trim().ToUpperInvariant()
+  if ($licenseInput) {
+    if ($envText -match '(?m)^LICENSE_KEY=') {
+      $envText = $envText -replace '(?m)^LICENSE_KEY=.*$', "LICENSE_KEY=$licenseInput"
+    } else {
+      $envText += "`nLICENSE_KEY=$licenseInput"
+    }
+    Set-Content -Path ".env" -Value $envText -NoNewline
+  }
+}
+
 if (-not (Test-Path ".secrets.key")) {
   Write-Host "==> Gerando .secrets.key"
   $key = -join ((1..32) | ForEach-Object { "{0:x2}" -f (Get-Random -Max 256) })

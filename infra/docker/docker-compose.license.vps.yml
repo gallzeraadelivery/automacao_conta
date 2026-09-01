@@ -1,0 +1,30 @@
+# Deploy no VPS com edge-nginx existente (sem Caddy — porta 80/443 já em uso)
+name: uber-license
+
+services:
+  license-server:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.license-server
+    container_name: license-server
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 8090
+      LICENSE_DB_PATH: /app/data/licenses.sqlite
+      LICENSE_ADMIN_USER: ${LICENSE_ADMIN_USER:-admin}
+      LICENSE_ADMIN_PASSWORD: ${LICENSE_ADMIN_PASSWORD:?defina LICENSE_ADMIN_PASSWORD}
+      LICENSE_SESSION_SECRET: ${LICENSE_SESSION_SECRET:?defina LICENSE_SESSION_SECRET}
+      LICENSE_CORS_ORIGIN: "*"
+    volumes:
+      - license_data:/app/data
+    networks:
+      - gdnew_web
+
+networks:
+  gdnew_web:
+    external: true
+    name: gdnew_web
+
+volumes:
+  license_data:

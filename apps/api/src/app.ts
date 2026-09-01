@@ -16,7 +16,11 @@ import { reportsRouter } from "./routes/reports.routes";
 import { settingsRouter } from "./routes/settings.routes";
 import { errorHandler, notFoundHandler } from "./middleware/errorHandler";
 
-export function createApp(): Express {
+export interface CreateAppOptions {
+  assertLicensed?: () => void;
+}
+
+export function createApp(options: CreateAppOptions = {}): Express {
   const app = express();
 
   app.use(helmet());
@@ -30,6 +34,24 @@ export function createApp(): Express {
   app.use(cookieParser());
 
   app.get("/health", (_req, res) => res.json({ success: true, data: { status: "ok" } }));
+
+  if (options.assertLicensed) {
+    app.use((req, res, next) => {
+      if (req.path === "/health") {
+        next();
+        return;
+      }
+      try {
+        options.assertLicensed!();
+        next();
+      } catch (error) {
+        res.status(403).json({
+          success: false,
+          error: { message: (error as Error).message || "Licença inválida ou revogada" },
+        });
+      }
+    });
+  }
 
   // Documentação interativa (Swagger UI) - sem autenticação, é apenas
   // documentação estática da própria API (nenhum dado de motorista/empresa).

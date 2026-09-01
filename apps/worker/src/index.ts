@@ -15,84 +15,89 @@ import { createUberAutomationRunner } from "./uberAutomationRunner";
 import { createManualBrowserRunner } from "./manualBrowserRunner";
 import { createScopedEmailVerificationWorker } from "./emailVerificationWorkerFactory";
 import type { AutomationJob } from "./automationJob.types";
+import { bootstrapLicenseGuard } from "./licenseBootstrap";
 
-const connection = new IORedis(env.REDIS_URL, { maxRetriesPerRequest: null });
+async function main() {
+  const licenseGuard = await bootstrapLicenseGuard();
 
-const auditLogger = new AuditLogger({ sink: createDatabaseAuditLogSink() });
-const limiter = new ConcurrencyLimiter(connection);
-const applicantStatusRepository = new DrizzleApplicantStatusRepository();
-const runAdministrativeFlow = createUberAutomationRunner({ auditLogger });
-const runManualBrowser = createManualBrowserRunner({ auditLogger });
+  const connection = new IORedis(env.REDIS_URL, { maxRetriesPerRequest: null });
 
-console.log(
-  `[worker] AUTOMATION_TARGET=${env.AUTOMATION_TARGET}` +
-    (env.AUTOMATION_TARGET === "mock" ? ` (${env.MOCK_UBER_BASE_URL})` : " (Uber real - CUIDADO)"),
-);
+  const auditLogger = new AuditLogger({ sink: createDatabaseAuditLogSink() });
+  const limiter = new ConcurrencyLimiter(connection);
+  const applicantStatusRepository = new DrizzleApplicantStatusRepository();
+  const runAdministrativeFlow = createUberAutomationRunner({ auditLogger });
+  const runManualBrowser = createManualBrowserRunner({ auditLogger });
 
-const worker = new Worker<AutomationJob>(
-  QUEUE_NAMES.AUTOMATION_JOBS,
-  async (job) => {
-    // BrowserProfileManager/EmailVerificationWorker sao construidos por job
-    // (nao como singleton do modulo) porque ambos so aceitam `companyId` na
-    // construcao, usado so para correlacionar audit logs - um singleton
-    // compartilhado entre empresas diferentes nao teria como acertar esse
-    // valor para todas. Ver emailVerificationWorkerFactory.ts.
-    const browserProfileManager = new BrowserProfileManager({
-      auditLogger,
-      companyId: job.data.companyId,
-      storageRoot:
-        process.env.BROWSER_PROFILES_STORAGE_PATH &&
-        path.isAbsolute(process.env.BROWSER_PROFILES_STORAGE_PATH)
-          ? process.env.BROWSER_PROFILES_STORAGE_PATH
-          : path.resolve(
-              path.dirname(fileURLToPath(import.meta.url)),
-              "../../storage/browser-profiles",
-            ),
-    });
-    const emailVerificationWorker = createScopedEmailVerificationWorker(
-      job.data.companyId,
-      auditLogger,
-      browserProfileManager,
-    );
+  console.log(
+    `[worker] AUTOMATION_TARGET=${env.AUTOMATION_TARGET}` +
+      (env.AUTOMATION_TARGET === "mock" ? ` (${env.MOCK_UBER_BASE_URL})` : " (Uber real - CUIDADO)"),
+  );
 
-    await processAutomationJob(job as unknown as AutomationJobLike, {
-      limiter,
-      auditLogger,
-      emailVerificationWorker,
-      applicantStatusRepository,
-      runAdministrativeFlow,
-      runManualBrowser,
-    });
-  },
-  {
-    connection,
-    concurrency: env.WORKER_CONCURRENCY,
-    // Browser manual fica aberto minutos; lock longo + renovação automática.
-    // maxStalledCount 1: se o worker cair, tenta 1x — o runner ignora
-    // reentrega do mesmo job sem abrir outro Chromium.
-    lockDuration: 120_000,
-    maxStalledCount: 1,
-    settings: { backoffStrategy: progressiveBackoffStrategy },
-  },
-);
+  const worker = new Worker<AutomationJob>(
+    QUEUE_NAMES.AUTOMATION_JOBS,
+    async (job) => {
+      licenseGuard.assertAllowed();
 
-worker.on("ready", () => {
-  console.log(`Worker ready, listening on queue "${QUEUE_NAMES.AUTOMATION_JOBS}"`);
-});
+      const browserProfileManager = new BrowserProfileManager({
+        auditLogger,
+        companyId: job.data.companyId,
+        storageRoot:
+          process.env.BROWSER_PROFILES_STORAGE_PATH &&
+          path.isAbsolute(process.env.BROWSER_PROFILES_STORAGE_PATH)
+            ? process.env.BROWSER_PROFILES_STORAGE_PATH
+            : path.resolve(
+                path.dirname(fileURLToPath(import.meta.url)),
+                "../../storage/browser-profiles",
+              ),
+      });
+      const emailVerificationWorker = createScopedEmailVerificationWorker(
+        job.data.companyId,
+        auditLogger,
+        browserProfileManager,
+      );
 
-worker.on("failed", (job, error) => {
-  console.error(`[worker] job ${job?.id} failed: ${error.message}`);
-});
+      await processAutomationJob(job as unknown as AutomationJobLike, {
+        limiter,
+        auditLogger,
+        emailVerificationWorker,
+        applicantStatusRepository,
+        runAdministrativeFlow,
+        runManualBrowser,
+      });
+    },
+    {
+      connection,
+      concurrency: env.WORKER_CONCURRENCY,
+      lockDuration: 120_000,
+      maxStalledCount: 1,
+      settings: { backoffStrategy: progressiveBackoffStrategy },
+    },
+  );
 
-worker.on("error", (error) => {
-  console.error("Worker error:", error);
-});
+  worker.on("ready", () => {
+    console.log(`Worker ready, listening on queue "${QUEUE_NAMES.AUTOMATION_JOBS}"`);
+  });
 
-async function shutdown() {
-  await worker.close();
-  await connection.quit();
-  process.exit(0);
+  worker.on("failed", (job, error) => {
+    console.error(`[worker] job ${job?.id} failed: ${error.message}`);
+  });
+
+  worker.on("error", (error) => {
+    console.error("Worker error:", error);
+  });
+
+  async function shutdown() {
+    licenseGuard.stop();
+    await worker.close();
+    await connection.quit();
+    process.exit(0);
+  }
+
+  process.on("SIGINT", shutdown);
+  process.on("SIGTERM", shutdown);
 }
 
-process.on("SIGINT", shutdown);
-process.on("SIGTERM", shutdown);
+main().catch((error) => {
+  console.error("[worker] Falha ao iniciar:", error);
+  process.exit(1);
+});

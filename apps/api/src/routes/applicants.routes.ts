@@ -14,6 +14,8 @@ import {
   startAutomationBatch,
   deleteApplicant,
   purgeVeriffApplicants,
+  purgeSocureApplicants,
+  deleteApplicantsBatch,
   getUberCookiesExport,
   setCookiesDownloaded,
   exportUberCookiesZip,
@@ -250,6 +252,53 @@ applicantsRouter.post(
         operatorId: req.user!.operatorId,
         action: "purge_veriff_applicants",
         metadata: result,
+      });
+
+      return res.json({ success: true, data: result });
+    } catch (error) {
+      return next(error);
+    }
+  },
+);
+
+applicantsRouter.post(
+  "/purge-socure",
+  requireRole("admin", "operator"),
+  async (req, res, next) => {
+    try {
+      const result = await purgeSocureApplicants(req.user!.companyId);
+
+      await logAudit({
+        companyId: req.user!.companyId,
+        operatorId: req.user!.operatorId,
+        action: "purge_socure_applicants",
+        metadata: result,
+      });
+
+      return res.json({ success: true, data: result });
+    } catch (error) {
+      return next(error);
+    }
+  },
+);
+
+applicantsRouter.post(
+  "/delete-batch",
+  requireRole("admin", "operator"),
+  async (req, res, next) => {
+    try {
+      const body = z
+        .object({
+          applicantIds: z.array(z.string().uuid()).min(1),
+        })
+        .parse(req.body);
+      const result = await deleteApplicantsBatch(req.user!.companyId, body.applicantIds);
+
+      await logAudit({
+        companyId: req.user!.companyId,
+        operatorId: req.user!.operatorId,
+        action: "delete_applicants_batch",
+        metadata: { ...result, requested: body.applicantIds.length },
       });
 
       return res.json({ success: true, data: result });

@@ -31,6 +31,14 @@ const envSchema = z.object({
     .string()
     .default("apps/worker/storage/browser-profiles"),
   AUTOMATION_SCREENSHOTS_PATH: z.string().default("apps/worker/storage/automation-screenshots"),
+  /** Proteção por licença GD-XXXX-XXXX (servidor central). */
+  LICENSE_ENABLED: z
+    .string()
+    .default("true")
+    .transform((v) => v !== "false"),
+  LICENSE_SERVER_URL: z.string().url().default("https://automacao.gdapps.online"),
+  LICENSE_KEY: z.string().optional(),
+  LICENSE_HEARTBEAT_MS: z.coerce.number().int().min(60_000).default(900_000),
 });
 
 export const env = envSchema.parse(process.env);

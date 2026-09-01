@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>GD Apps — Licenças</title>
+  <style>
+    :root { --bg:#0f1419; --card:#1a2332; --text:#e7ecf3; --muted:#8b9bb4; --accent:#22c55e; --danger:#ef4444; --border:#2d3a4f; --warn:#f59e0b; }
+    * { box-sizing: border-box; }
+    body { margin:0; font-family: system-ui, sans-serif; background:var(--bg); color:var(--text); }
+    .wrap { max-width:1200px; margin:0 auto; padding:24px; }
+    h1 { margin:0 0 8px; font-size:1.5rem; }
+    .sub { color:var(--muted); margin-bottom:24px; }
+    .card { background:var(--card); border:1px solid var(--border); border-radius:12px; padding:20px; margin-bottom:20px; }
+    label { display:block; font-size:.85rem; color:var(--muted); margin-bottom:6px; }
+    input, button, select { font:inherit; }
+    input[type=text], input[type=password], input[type=number], input[type=datetime-local] {
+      width:100%; padding:10px 12px; border-radius:8px; border:1px solid var(--border); background:#0b1017; color:var(--text);
+    }
+    input[type=checkbox] { width:auto; margin-right:8px; }
+    .row { display:grid; grid-template-columns:1fr 1fr 1fr auto; gap:12px; align-items:end; }
+    @media (max-width:800px) { .row { grid-template-columns:1fr; } }
+    button { border:0; border-radius:8px; padding:8px 12px; cursor:pointer; font-weight:600; font-size:.85rem; }
+    .btn-primary { background:var(--accent); color:#052e16; }
+    .btn-danger { background:var(--danger); color:#fff; }
+    .btn-muted { background:#334155; color:#fff; }
+    .btn-sm { padding:4px 8px; font-size:.75rem; }
+    table { width:100%; border-collapse:collapse; font-size:.9rem; }
+    th, td { text-align:left; padding:10px 8px; border-bottom:1px solid var(--border); vertical-align:top; }
+    th { color:var(--muted); font-weight:600; }
+    .pill { display:inline-block; padding:2px 8px; border-radius:999px; font-size:.75rem; font-weight:700; }
+    .pill.active { background:#14532d; color:#bbf7d0; }
+    .pill.revoked { background:#7f1d1d; color:#fecaca; }
+    .pill.expired { background:#78350f; color:#fde68a; }
+    .pill.online { background:#14532d; color:#bbf7d0; }
+    .pill.offline { background:#334155; color:#cbd5e1; }
+    .key { font-family: ui-monospace, monospace; letter-spacing:.04em; font-size:.85rem; }
+    .hidden { display:none; }
+    .error { color:#fca5a5; margin-top:8px; }
+    .toolbar { display:flex; gap:12px; flex-wrap:wrap; margin-bottom:16px; align-items:center; }
+    #loginCard { max-width:420px; margin:80px auto; }
+    .login-field { margin-bottom:12px; }
+    .user-badge { color:var(--muted); font-size:.9rem; margin-bottom:16px; }
+    .license-block { border:1px solid var(--border); border-radius:10px; padding:16px; margin-bottom:16px; background:#121a24; }
+    .license-head { display:flex; flex-wrap:wrap; gap:12px; align-items:center; justify-content:space-between; margin-bottom:12px; }
+    .license-meta { display:flex; flex-wrap:wrap; gap:16px; align-items:center; font-size:.9rem; }
+    .limit-row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+    .limit-row input[type=number] { width:70px; }
+    .machines-table { margin-top:12px; }
+    .machines-table td { font-size:.85rem; }
+    .muted { color:var(--muted); font-size:.8rem; }
+    .actions { display:flex; gap:6px; flex-wrap:wrap; }
+    .check-inline { display:flex; align-items:center; color:var(--muted); font-size:.85rem; }
+  </style>
+</head>
+<body>
+  <div id="loginCard" class="card">
+    <h1>Painel de Licenças</h1>
+    <p class="sub">automacao.gdapps.online</p>
+    <div class="login-field">
+      <label for="username">Usuário</label>
+      <input id="username" type="text" autocomplete="username" />
+    </div>
+    <div class="login-field">
+      <label for="password">Senha</label>
+      <input id="password" type="password" autocomplete="current-password" />
+    </div>
+    <p id="loginError" class="error hidden"></p>
+    <button class="btn-primary" style="margin-top:12px;width:100%" onclick="login()">Entrar</button>
+  </div>
+
+  <div id="app" class="wrap hidden">
+    <h1>Licenças GD Apps</h1>
+    <p class="sub">Veja quais computadores estão usando cada chave e defina quantas máquinas são permitidas</p>
+    <p id="userBadge" class="user-badge"></p>
+
+    <div class="card">
+      <h3 style="margin-top:0">Nova licença</h3>
+      <div class="row">
+        <div>
+          <label>Etiqueta (opcional)</label>
+          <input id="newLabel" type="text" placeholder="Cliente X / Escritório SP" />
+        </div>
+        <div>
+          <label>Limite de computadores</label>
+          <div class="limit-row">
+            <input id="newMax" type="number" min="1" value="1" />
+            <label class="check-inline"><input id="newUnlimited" type="checkbox" onchange="toggleNewLimit()" /> Ilimitado</label>
+          </div>
+        </div>
+        <div>
+          <label>Expira em (opcional)</label>
+          <input id="newExpires" type="datetime-local" />
+        </div>
+        <button class="btn-primary" onclick="createLicense()">Gerar chave</button>
+      </div>
+      <p id="createMsg" class="error hidden"></p>
+    </div>
+
+    <div class="card">
+      <div class="toolbar">
+        <button class="btn-muted" onclick="loadLicenses()">Atualizar</button>
+        <button class="btn-muted" onclick="logout()">Sair</button>
+      </div>
+      <div id="licenseList"></div>
+    </div>
+  </div>
+
+  <script>
+    async function api(path, opts = {}) {
+      const res = await fetch(path, {
+        ...opts,
+        credentials: "include",
+        headers: { "Content-Type": "application/json", ...(opts.headers || {}) },
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error?.message || "Erro na API");
+      return body.data;
+    }
+
+    function fmtDate(iso) {
+      if (!iso) return "—";
+      const d = new Date(iso);
+      return d.toLocaleString("pt-BR");
+    }
+
+    function pill(status) {
+      return `<span class="pill ${status}">${status}</span>`;
+    }
+
+    function showLogin(err) {
+      document.getElementById("loginCard").classList.remove("hidden");
+      document.getElementById("app").classList.add("hidden");
+      const el = document.getElementById("loginError");
+      if (err) { el.textContent = err; el.classList.remove("hidden"); }
+      else el.classList.add("hidden");
+    }
+
+    function showApp(username) {
+      document.getElementById("loginCard").classList.add("hidden");
+      document.getElementById("app").classList.remove("hidden");
+      document.getElementById("userBadge").textContent = "Logado como " + username;
+    }
+
+    function toggleNewLimit() {
+      const unlimited = document.getElementById("newUnlimited").checked;
+      document.getElementById("newMax").disabled = unlimited;
+    }
+
+    async function login() {
+      const username = document.getElementById("username").value.trim();
+      const password = document.getElementById("password").value;
+      if (!username || !password) return showLogin("Informe usuário e senha");
+      try {
+        const data = await api("/api/admin/auth/login", {
+          method: "POST",
+          body: JSON.stringify({ username, password }),
+        });
+        document.getElementById("password").value = "";
+        showApp(data.username);
+        loadLicenses();
+      } catch (e) {
+        showLogin(e.message);
+      }
+    }
+
+    async function logout() {
+      try { await api("/api/admin/auth/logout", { method: "POST", body: "{}" }); } catch (_) {}
+      showLogin();
+    }
+
+    async function tryRestoreSession() {
+      try {
+        const data = await api("/api/admin/auth/me");
+        showApp(data.username);
+        loadLicenses();
+      } catch (_) {
+        showLogin();
+      }
+    }
+
+    function limitLabel(lic) {
+      if (lic.unlimited || lic.maxMachines <= 0) return "Ilimitado";
+      return lic.activationCount + "/" + lic.maxMachines;
+    }
+
+    function renderMachines(lic) {
+      if (!lic.activations.length) {
+        return `<p class="muted">Nenhum computador conectado ainda.</p>`;
+      }
+      return `<table class="machines-table">
+        <thead><tr><th>Computador</th><th>Sistema</th><th>Status</th><th>Desde</th><th>Último ping</th><th></th></tr></thead>
+        <tbody>${lic.activations.map((m) => `
+          <tr>
+            <td><strong>${escapeHtml(m.hostname)}</strong><br><span class="muted key">${m.machineId.slice(0, 8)}…</span></td>
+            <td>${escapeHtml(m.platform || "—")}</td>
+            <td>${m.online ? pill("online") : pill("offline")}</td>
+            <td class="muted">${fmtDate(m.createdAt)}</td>
+            <td class="muted">${fmtDate(m.lastSeenAt)}</td>
+            <td><button class="btn-danger btn-sm" onclick="removeMachine('${lic.licenseKey}','${m.machineId}')">Remover</button></td>
+          </tr>`).join("")}
+        </tbody></table>`;
+    }
+
+    function escapeHtml(s) {
+      return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/"/g,"&quot;");
+    }
+
+    async function loadLicenses() {
+      const rows = await api("/api/admin/licenses");
+      const el = document.getElementById("licenseList");
+      if (!rows.length) {
+        el.innerHTML = `<p class="muted">Nenhuma licença cadastrada.</p>`;
+        return;
+      }
+      el.innerHTML = rows.map((lic) => {
+        const unlimited = lic.unlimited || lic.maxMachines <= 0;
+        return `<div class="license-block" id="lic-${lic.licenseKey}">
+          <div class="license-head">
+            <div>
+              <div class="key" style="font-size:1.1rem">${lic.licenseKey}</div>
+              <div class="muted">${lic.label || "Sem etiqueta"} · criada ${fmtDate(lic.createdAt)}</div>
+            </div>
+            <div class="license-meta">
+              ${pill(lic.status)}
+              <span>Computadores: <strong>${limitLabel(lic)}</strong></span>
+            </div>
+          </div>
+          <div class="limit-row" style="margin-bottom:12px">
+            <label class="check-inline"><input type="checkbox" id="unlim-${lic.licenseKey}" ${unlimited ? "checked" : ""} onchange="toggleLimit('${lic.licenseKey}')"> Ilimitado</label>
+            <label>Máx. máquinas:</label>
+            <input type="number" min="1" id="max-${lic.licenseKey}" value="${unlimited ? 1 : lic.maxMachines}" ${unlimited ? "disabled" : ""} />
+            <button class="btn-muted btn-sm" onclick="saveLimit('${lic.licenseKey}')">Salvar limite</button>
+            ${lic.status === "revoked"
+              ? `<button class="btn-primary btn-sm" onclick="setActive('${lic.licenseKey}')">Reativar licença</button>`
+              : `<button class="btn-danger btn-sm" onclick="revoke('${lic.licenseKey}')">Revogar licença</button>`}
+          </div>
+          <h4 style="margin:0 0 8px;font-size:.95rem">Computadores logados</h4>
+          ${renderMachines(lic)}
+        </div>`;
+      }).join("");
+    }
+
+    function toggleLimit(key) {
+      const unlimited = document.getElementById("unlim-" + key).checked;
+      document.getElementById("max-" + key).disabled = unlimited;
+    }
+
+    async function saveLimit(key) {
+      const unlimited = document.getElementById("unlim-" + key).checked;
+      const maxMachines = unlimited ? 0 : Number(document.getElementById("max-" + key).value || 1);
+      await api("/api/admin/licenses/" + encodeURIComponent(key), {
+        method: "PATCH",
+        body: JSON.stringify({ maxMachines }),
+      });
+      loadLicenses();
+    }
+
+    async function createLicense() {
+      const label = document.getElementById("newLabel").value.trim();
+      const unlimited = document.getElementById("newUnlimited").checked;
+      const maxMachines = unlimited ? 0 : Number(document.getElementById("newMax").value || 1);
+      const expRaw = document.getElementById("newExpires").value;
+      const expiresAt = expRaw ? new Date(expRaw).toISOString() : null;
+      const msg = document.getElementById("createMsg");
+      try {
+        const lic = await api("/api/admin/licenses", {
+          method: "POST",
+          body: JSON.stringify({ label, maxMachines, expiresAt }),
+        });
+        msg.classList.remove("hidden");
+        msg.style.color = "#86efac";
+        msg.textContent = "Chave gerada: " + lic.licenseKey;
+        loadLicenses();
+      } catch (e) {
+        msg.classList.remove("hidden");
+        msg.style.color = "#fca5a5";
+        msg.textContent = e.message;
+      }
+    }
+
+    async function revoke(key) {
+      if (!confirm("Revogar licença " + key + "? Todos os computadores serão bloqueados.")) return;
+      await api("/api/admin/licenses/" + encodeURIComponent(key) + "/revoke", { method: "POST", body: "{}" });
+      loadLicenses();
+    }
+
+    async function setActive(key) {
+      await api("/api/admin/licenses/" + encodeURIComponent(key) + "/activate", { method: "POST", body: "{}" });
+      loadLicenses();
+    }
+
+    async function removeMachine(licenseKey, machineId) {
+      if (!confirm("Remover este computador da licença? Ele precisará se registrar de novo.")) return;
+      await api("/api/admin/licenses/" + encodeURIComponent(licenseKey) + "/activations/" + encodeURIComponent(machineId), {
+        method: "DELETE",
+      });
+      loadLicenses();
+    }
+
+    document.getElementById("password").addEventListener("keydown", (e) => {
+      if (e.key === "Enter") login();
+    });
+
+    tryRestoreSession();
+  </script>
+</body>
+</html>
