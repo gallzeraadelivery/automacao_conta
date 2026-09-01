@@ -37,8 +37,14 @@ try {
 }
 
 if (Test-Path ".git") {
+  $branch = git branch --show-current 2>$null
+  if (-not $branch) { $branch = "?" }
+  Write-Host "==> Branch atual: $branch"
   Write-Host "==> git pull..."
   try { git pull --ff-only } catch { git pull }
+  $hash = git rev-parse --short HEAD 2>$null
+  $subject = git log -1 --pretty=%s 2>$null
+  Write-Host "    Commit: $hash — $subject"
 } else {
   Write-Host "AVISO: sem .git — pulando pull."
 }

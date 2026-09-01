@@ -35,8 +35,11 @@ if ! docker info >/dev/null 2>&1; then
 fi
 
 if [[ -d .git ]]; then
+  BRANCH="$(git branch --show-current 2>/dev/null || echo '?')"
+  echo "==> Branch atual: $BRANCH"
   echo "==> git pull..."
   git pull --ff-only || git pull
+  echo "    Commit: $(git rev-parse --short HEAD) — $(git log -1 --pretty=%s)"
 else
   echo "AVISO: pasta sem .git — pulando git pull (código local)."
 fi
