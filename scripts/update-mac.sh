@@ -44,10 +44,39 @@ else
   echo "AVISO: pasta sem .git — pulando git pull (código local)."
 fi
 
-# Garante Uber real
-if [[ -f .env ]] && grep -q '^AUTOMATION_TARGET=mock' .env 2>/dev/null; then
+# Garante .env (nao vai no git — maquinas novas apos git pull precisam disso)
+if [[ ! -f .env ]]; then
+  if [[ ! -f .env.example ]]; then
+    echo "ERRO: falta .env e .env.example nesta pasta."
+    exit 1
+  fi
+  echo "==> Criando .env a partir de .env.example"
+  cp .env.example .env
+  ACCESS="$(openssl rand -hex 32)"
+  REFRESH="$(openssl rand -hex 32)"
+  CRED="$(openssl rand -hex 32)"
+  sed -i '' "s/replace-with-a-long-random-secret/${ACCESS}/" .env
+  sed -i '' "s/replace-with-another-long-random-secret/${REFRESH}/" .env
+  sed -i '' "s/replace-with-64-hex-characters-32-byte-key/${CRED}/" .env
+fi
+if [[ ! -f .secrets.key ]]; then
+  echo "==> Gerando .secrets.key"
+  openssl rand -hex 32 > .secrets.key
+fi
+if grep -q '^AUTOMATION_TARGET=mock' .env 2>/dev/null; then
   echo "==> .env mock → production"
   sed -i '' 's/^AUTOMATION_TARGET=mock$/AUTOMATION_TARGET=production/' .env
+fi
+if ! grep -q '^AUTOMATION_TARGET=' .env 2>/dev/null; then
+  echo 'AUTOMATION_TARGET=production' >> .env
+fi
+if grep -q '^LICENSE_KEY=GD-XXXX-XXXX' .env 2>/dev/null || grep -q '^LICENSE_KEY=$' .env 2>/dev/null; then
+  echo "==> Licenca nao configurada - LICENSE_ENABLED=false (edite .env depois)"
+  if grep -q '^LICENSE_ENABLED=' .env 2>/dev/null; then
+    sed -i '' 's/^LICENSE_ENABLED=.*/LICENSE_ENABLED=false/' .env
+  else
+    echo 'LICENSE_ENABLED=false' >> .env
+  fi
 fi
 
 echo "==> Rebuild + restart (postgres/redis/api/web/worker)..."

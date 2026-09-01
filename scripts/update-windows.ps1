@@ -86,14 +86,50 @@ if (Test-Path ".git") {
   Write-Log "    Baixe de novo do GitHub ou use: git clone https://github.com/gallzeraadelivery/automacao_conta.git"
 }
 
-if (Test-Path ".env") {
+function Ensure-EnvFile {
+  if (-not (Test-Path ".env")) {
+    if (-not (Test-Path ".env.example")) {
+      Write-Log "ERRO: falta .env e .env.example nesta pasta."
+      exit 1
+    }
+    Write-Log "==> Criando .env a partir de .env.example (nao vai no git)"
+    Copy-Item ".env.example" ".env"
+    $access = -join ((1..32) | ForEach-Object { "{0:x2}" -f (Get-Random -Max 256) })
+    $refresh = -join ((1..32) | ForEach-Object { "{0:x2}" -f (Get-Random -Max 256) })
+    $cred = -join ((1..32) | ForEach-Object { "{0:x2}" -f (Get-Random -Max 256) })
+    (Get-Content ".env" -Raw) `
+      -replace "replace-with-a-long-random-secret", $access `
+      -replace "replace-with-another-long-random-secret", $refresh `
+      -replace "replace-with-64-hex-characters-32-byte-key", $cred |
+      Set-Content ".env" -NoNewline
+  }
+
   $envText = Get-Content ".env" -Raw
   if ($envText -match '(?m)^AUTOMATION_TARGET=mock\s*$') {
     Write-Log "==> .env mock -> production"
     $envText = $envText -replace '(?m)^AUTOMATION_TARGET=mock\s*$', 'AUTOMATION_TARGET=production'
-    Set-Content -Path ".env" -Value $envText -NoNewline
+  }
+  if ($envText -notmatch '(?m)^AUTOMATION_TARGET=') {
+    $envText += "`nAUTOMATION_TARGET=production"
+  }
+  if ($envText -match '(?m)^LICENSE_KEY=GD-XXXX-XXXX\s*$' -or $envText -match '(?m)^LICENSE_KEY=\s*$') {
+    Write-Log "==> Licenca nao configurada - LICENSE_ENABLED=false (edite .env depois)"
+    if ($envText -match '(?m)^LICENSE_ENABLED=') {
+      $envText = $envText -replace '(?m)^LICENSE_ENABLED=.*$', 'LICENSE_ENABLED=false'
+    } else {
+      $envText += "`nLICENSE_ENABLED=false"
+    }
+  }
+  Set-Content -Path ".env" -Value $envText -NoNewline
+
+  if (-not (Test-Path ".secrets.key")) {
+    Write-Log "==> Gerando .secrets.key"
+    $key = -join ((1..32) | ForEach-Object { "{0:x2}" -f (Get-Random -Max 256) })
+    Set-Content -Path ".secrets.key" -Value $key -NoNewline
   }
 }
+
+Ensure-EnvFile
 
 Write-Log "==> Rebuild + restart (postgres/redis/api/web/worker)..."
 docker compose -f infra/docker/docker-compose.yml up -d --build 2>&1 | ForEach-Object { Write-Log "    $_" }
