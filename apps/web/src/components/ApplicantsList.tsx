@@ -268,6 +268,11 @@ export function ApplicantsList() {
     setPage(1);
   }
 
+  function clearSelection() {
+    setCheckedIds(new Set());
+    setCheckedMeta(new Map());
+  }
+
   async function handleDelete(applicant: ApplicantRow) {
     if (
       !window.confirm(
@@ -284,6 +289,16 @@ export function ApplicantsList() {
     setDeletingId(null);
     if (result.success) {
       setApplicants((prev) => prev.filter((a) => a.id !== applicant.id));
+      setCheckedIds((prev) => {
+        const next = new Set(prev);
+        next.delete(applicant.id);
+        return next;
+      });
+      setCheckedMeta((prev) => {
+        const next = new Map(prev);
+        next.delete(applicant.id);
+        return next;
+      });
     } else {
       setActionError(result.error.message);
     }
@@ -532,6 +547,31 @@ export function ApplicantsList() {
       </div>
 
       {actionError && <p className="mb-3 text-sm text-red-600">{actionError}</p>}
+
+      {checkedIds.size > 0 && (
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3">
+          <p className="text-sm font-medium text-red-900">
+            <strong>{checkedIds.size}</strong> motorista{checkedIds.size === 1 ? "" : "s"} selecionado
+            {checkedIds.size === 1 ? "" : "s"}
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={clearSelection}
+              className="rounded-md border border-red-300 bg-white px-3 py-1.5 text-xs font-medium text-red-800 hover:bg-red-100"
+            >
+              Limpar seleção
+            </button>
+            <button
+              type="button"
+              onClick={() => setDeleteModalOpen(true)}
+              className="rounded-md bg-red-600 px-4 py-1.5 text-xs font-semibold text-white hover:bg-red-700"
+            >
+              Apagar {checkedIds.size} selecionado{checkedIds.size === 1 ? "" : "s"}
+            </button>
+          </div>
+        </div>
+      )}
 
       <div className="mb-4 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4">
         <label className="block">
