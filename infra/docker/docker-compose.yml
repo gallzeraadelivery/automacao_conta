@@ -44,10 +44,12 @@ services:
       WEB_PUBLIC_URL: ${WEB_PUBLIC_URL:-http://localhost:3000}
       # Mesmo volume do worker — download de cookies / delete de perfil.
       BROWSER_PROFILES_STORAGE_PATH: /app/storage/browser-profiles
+      LICENSE_KEY_FILE: /app/storage/host/license.key
     ports:
       - "${API_PORT:-4000}:4000"
     volumes:
       - browser_profiles_data:/app/storage/browser-profiles
+      - ../../storage:/app/storage/host
     depends_on:
       postgres:
         condition: service_healthy
@@ -101,6 +103,7 @@ services:
       AUTOMATION_SCREENSHOTS_PATH: /app/storage/automation-screenshots
       # Blacklist de placeholders (hub + SMS) — bind mount para não zerar no rebuild.
       UBER_PLACEHOLDER_PHONE_POOL_PATH: /app/apps/worker/storage/placeholder-phones-used.json
+      LICENSE_KEY_FILE: /app/storage/host/license.key
     ports:
       # noVNC: abra http://localhost:6080/vnc.html para ver o Electron headed
       - "6080:6080"
@@ -108,6 +111,7 @@ services:
       - browser_profiles_data:/app/storage/browser-profiles
       - ../../storage/automation-screenshots:/app/storage/automation-screenshots
       - ../../apps/worker/storage:/app/apps/worker/storage
+      - ../../storage:/app/storage/host
     depends_on:
       postgres:
         condition: service_healthy

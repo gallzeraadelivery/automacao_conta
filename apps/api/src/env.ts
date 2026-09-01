@@ -38,6 +38,8 @@ const envSchema = z.object({
     .transform((v) => v !== "false"),
   LICENSE_SERVER_URL: z.string().url().default("https://automacao.gdapps.online"),
   LICENSE_KEY: z.string().optional(),
+  /** Arquivo local onde a chave e salva apos ativacao no painel. */
+  LICENSE_KEY_FILE: z.string().optional(),
   LICENSE_HEARTBEAT_MS: z.coerce.number().int().min(60_000).default(900_000),
 });
 

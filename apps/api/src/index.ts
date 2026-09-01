@@ -1,10 +1,13 @@
 import { env } from "./env";
 import { createApp } from "./app";
-import { bootstrapLicenseGuard } from "./licenseBootstrap";
+import { bootstrapLicenseGuard, getLicenseGuard } from "./licenseBootstrap";
 
 async function main() {
   const licenseGuard = await bootstrapLicenseGuard();
-  const app = createApp({ assertLicensed: () => licenseGuard.assertAllowed() });
+  const app = createApp({
+    assertLicensed: () => licenseGuard.assertAllowed(),
+    getLicenseGuard,
+  });
 
   app.listen(env.API_PORT, () => {
     console.log(`API listening on port ${env.API_PORT} (${env.NODE_ENV})`);

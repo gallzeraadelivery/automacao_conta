@@ -112,15 +112,14 @@ function Ensure-EnvFile {
   if ($envText -notmatch '(?m)^AUTOMATION_TARGET=') {
     $envText += "`nAUTOMATION_TARGET=production"
   }
-  if ($envText -match '(?m)^LICENSE_KEY=GD-XXXX-XXXX\s*$' -or $envText -match '(?m)^LICENSE_KEY=\s*$') {
-    Write-Log "==> Licenca nao configurada - LICENSE_ENABLED=false (edite .env depois)"
-    if ($envText -match '(?m)^LICENSE_ENABLED=') {
-      $envText = $envText -replace '(?m)^LICENSE_ENABLED=.*$', 'LICENSE_ENABLED=false'
-    } else {
-      $envText += "`nLICENSE_ENABLED=false"
-    }
+  if ($envText -notmatch '(?m)^LICENSE_ENABLED=') {
+    $envText += "`nLICENSE_ENABLED=true"
   }
   Set-Content -Path ".env" -Value $envText -NoNewline
+
+  if (-not (Test-Path "storage")) {
+    New-Item -ItemType Directory -Path "storage" | Out-Null
+  }
 
   if (-not (Test-Path ".secrets.key")) {
     Write-Log "==> Gerando .secrets.key"

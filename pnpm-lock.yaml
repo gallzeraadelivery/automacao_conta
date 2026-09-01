@@ -44,6 +44,9 @@ importers:
       '@uber-automation/license-client':
         specifier: workspace:*
         version: link:../../packages/license-client
+      '@uber-automation/license-shared':
+        specifier: workspace:*
+        version: link:../../packages/license-shared
       '@uber-automation/proxy-manager':
         specifier: workspace:*
         version: link:../../packages/proxy-manager

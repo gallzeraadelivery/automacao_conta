@@ -20,6 +20,11 @@ import { bootstrapLicenseGuard } from "./licenseBootstrap";
 async function main() {
   const licenseGuard = await bootstrapLicenseGuard();
 
+  const licenseReloadTimer = setInterval(() => {
+    void licenseGuard.tryReloadFromFile();
+  }, 30_000);
+  licenseReloadTimer.unref?.();
+
   const connection = new IORedis(env.REDIS_URL, { maxRetriesPerRequest: null });
 
   const auditLogger = new AuditLogger({ sink: createDatabaseAuditLogSink() });
@@ -87,6 +92,7 @@ async function main() {
   });
 
   async function shutdown() {
+    clearInterval(licenseReloadTimer);
     licenseGuard.stop();
     await worker.close();
     await connection.quit();

@@ -15,6 +15,7 @@
     "@uber-automation/database": "workspace:*",
     "@uber-automation/email-service": "workspace:*",
     "@uber-automation/license-client": "workspace:*",
+    "@uber-automation/license-shared": "workspace:*",
     "@uber-automation/proxy-manager": "workspace:*",
     "@uber-automation/security": "workspace:*",
     "@uber-automation/shared": "workspace:*",

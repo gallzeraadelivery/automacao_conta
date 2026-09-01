@@ -23,6 +23,7 @@ export interface LicenseGuardConfig {
   enabled: boolean;
   serverUrl: string;
   licenseKey?: string;
+  licenseKeyFile?: string;
   baseDir: string;
   appVersion?: string;
   heartbeatMs?: number;
@@ -36,6 +37,45 @@ export interface LicenseClientState {
 }
 
 const DEFAULT_MACHINE_ID_FILE = ".license-machine-id";
+const DEFAULT_LICENSE_KEY_FILE = "storage/license.key";
+
+export function resolveLicenseKeyFile(baseDir: string): string {
+  return path.join(baseDir, DEFAULT_LICENSE_KEY_FILE);
+}
+
+export function readLicenseKeyFromFile(filePath: string): string | null {
+  try {
+    const raw = fs.readFileSync(filePath, "utf8").trim();
+    if (!raw) return null;
+    const key = normalizeLicenseKey(raw);
+    return isValidLicenseKeyFormat(key) ? key : null;
+  } catch {
+    return null;
+  }
+}
+
+export function writeLicenseKeyToFile(filePath: string, licenseKey: string): void {
+  const key = normalizeLicenseKey(licenseKey);
+  if (!isValidLicenseKeyFormat(key)) {
+    throw new Error(`LICENSE_KEY invalida (esperado GD-XXXX-XXXX): ${licenseKey}`);
+  }
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, `${key}\n`, "utf8");
+}
+
+export interface LicenseGuard {
+  client: LicenseClient | null;
+  stop: () => void;
+  assertAllowed: () => void;
+  getStatus: () => LicenseClientState & {
+    enabled: boolean;
+    configured: boolean;
+    licenseKeyMasked: string | null;
+    machineId: string | null;
+  };
+  activate: (licenseKey: string) => Promise<LicenseClient>;
+  tryReloadFromFile: () => Promise<boolean>;
+}
 
 export function resolveMachineIdFile(baseDir: string): string {
   return path.join(baseDir, DEFAULT_MACHINE_ID_FILE);
@@ -162,42 +202,151 @@ export async function ensureLicensed(options: LicenseClientOptions): Promise<Lic
   return client;
 }
 
-export async function startLicenseGuard(config: LicenseGuardConfig): Promise<{
-  client: LicenseClient | null;
-  stop: () => void;
-  assertAllowed: () => void;
-}> {
+export async function startLicenseGuard(config: LicenseGuardConfig): Promise<LicenseGuard> {
+  const baseDir = config.baseDir;
+  const keyFile = config.licenseKeyFile ?? resolveLicenseKeyFile(baseDir);
+  const machineIdFile = resolveMachineIdFile(baseDir);
+  const machineId = getOrCreateMachineId(machineIdFile);
+
   if (!config.enabled) {
-    console.warn("[license] Verificação desabilitada (LICENSE_ENABLED=false)");
-    return { client: null, stop: () => {}, assertAllowed: () => {} };
-  }
-  if (!config.licenseKey?.trim()) {
-    throw new Error("LICENSE_KEY é obrigatória (formato GD-XXXX-XXXX)");
+    console.warn("[license] Verificacao desabilitada (LICENSE_ENABLED=false)");
+    return {
+      client: null,
+      stop: () => {},
+      assertAllowed: () => {},
+      getStatus: () => ({
+        ok: true,
+        status: "disabled",
+        message: "Verificacao de licenca desabilitada",
+        checkedAt: Date.now(),
+        enabled: false,
+        configured: true,
+        licenseKeyMasked: null,
+        machineId,
+      }),
+      activate: async () => {
+        throw new Error("Licenca desabilitada nesta instalacao");
+      },
+      tryReloadFromFile: async () => false,
+    };
   }
 
-  const client = await ensureLicensed({
-    serverUrl: config.serverUrl,
-    licenseKey: config.licenseKey,
-    baseDir: config.baseDir,
-    appVersion: config.appVersion,
-  });
+  let client: LicenseClient | null = null;
+  let timer: ReturnType<typeof setInterval> | null = null;
+  let currentKey: string | null = null;
 
-  const intervalMs = config.heartbeatMs ?? 15 * 60 * 1000;
-  const timer = setInterval(() => {
-    void client.heartbeat().then((status) => {
-      if (!status.ok) {
-        console.error(`[license] Heartbeat falhou: ${status.message}`);
-      }
+  function maskKey(key: string | null): string | null {
+    if (!key) return null;
+    return `${key.slice(0, 3)}-****-****`;
+  }
+
+  function stopHeartbeat() {
+    if (timer) {
+      clearInterval(timer);
+      timer = null;
+    }
+  }
+
+  function startHeartbeat(activeClient: LicenseClient) {
+    stopHeartbeat();
+    const intervalMs = config.heartbeatMs ?? 15 * 60 * 1000;
+    timer = setInterval(() => {
+      void activeClient.heartbeat().then((status) => {
+        if (!status.ok) {
+          console.error(`[license] Heartbeat falhou: ${status.message}`);
+        }
+      });
+    }, intervalMs);
+    timer.unref?.();
+  }
+
+  function resolveConfiguredKey(): string | null {
+    const fromEnv = config.licenseKey?.trim();
+    if (fromEnv && isValidLicenseKeyFormat(fromEnv)) {
+      return normalizeLicenseKey(fromEnv);
+    }
+    return readLicenseKeyFromFile(keyFile);
+  }
+
+  async function loadClient(licenseKey: string): Promise<LicenseClient> {
+    const next = await ensureLicensed({
+      serverUrl: config.serverUrl,
+      licenseKey,
+      baseDir,
+      appVersion: config.appVersion,
+      machineIdFile,
     });
-  }, intervalMs);
-  timer.unref?.();
+    client = next;
+    currentKey = licenseKey;
+    startHeartbeat(next);
+    return next;
+  }
+
+  const initialKey = resolveConfiguredKey();
+  if (initialKey) {
+    try {
+      await loadClient(initialKey);
+      console.log(`[license] Licenca OK — ${client!.getState().message}`);
+    } catch (error) {
+      console.warn(`[license] Falha ao validar licenca inicial: ${(error as Error).message}`);
+      client = null;
+      currentKey = initialKey;
+    }
+  } else {
+    console.warn("[license] Nenhuma chave configurada — aguardando ativacao no painel");
+  }
 
   return {
-    client,
-    stop: () => clearInterval(timer),
+    get client() {
+      return client;
+    },
+    stop: () => {
+      stopHeartbeat();
+    },
+    getStatus: () => {
+      const state = client?.getState() ?? {
+        ok: false,
+        status: currentKey ? "unknown" : "missing",
+        message: currentKey
+          ? "Licenca invalida ou nao autorizada"
+          : "Informe a chave GD-XXXX-XXXX no painel",
+        checkedAt: 0,
+      };
+      return {
+        ...state,
+        enabled: true,
+        configured: Boolean(currentKey ?? resolveConfiguredKey()),
+        licenseKeyMasked: maskKey(currentKey ?? resolveConfiguredKey()),
+        machineId,
+      };
+    },
     assertAllowed: () => {
-      if (!client.isLicensed()) {
-        throw new Error(client.getState().message || "Licença inválida ou revogada");
+      if (!client?.isLicensed()) {
+        throw new Error(
+          currentKey || resolveConfiguredKey()
+            ? client?.getState().message || "Licenca invalida ou revogada"
+            : "LICENSE_REQUIRED",
+        );
+      }
+    },
+    activate: async (licenseKey: string) => {
+      writeLicenseKeyToFile(keyFile, licenseKey);
+      const key = normalizeLicenseKey(licenseKey);
+      currentKey = key;
+      process.env.LICENSE_KEY = key;
+      return loadClient(key);
+    },
+    tryReloadFromFile: async () => {
+      if (client?.isLicensed()) return true;
+      const key = resolveConfiguredKey();
+      if (!key || key === currentKey) return false;
+      try {
+        await loadClient(key);
+        return true;
+      } catch {
+        currentKey = key;
+        client = null;
+        return false;
       }
     },
   };

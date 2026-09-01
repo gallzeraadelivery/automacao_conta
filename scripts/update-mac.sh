@@ -70,14 +70,10 @@ fi
 if ! grep -q '^AUTOMATION_TARGET=' .env 2>/dev/null; then
   echo 'AUTOMATION_TARGET=production' >> .env
 fi
-if grep -q '^LICENSE_KEY=GD-XXXX-XXXX' .env 2>/dev/null || grep -q '^LICENSE_KEY=$' .env 2>/dev/null; then
-  echo "==> Licenca nao configurada - LICENSE_ENABLED=false (edite .env depois)"
-  if grep -q '^LICENSE_ENABLED=' .env 2>/dev/null; then
-    sed -i '' 's/^LICENSE_ENABLED=.*/LICENSE_ENABLED=false/' .env
-  else
-    echo 'LICENSE_ENABLED=false' >> .env
-  fi
+if ! grep -q '^LICENSE_ENABLED=' .env 2>/dev/null; then
+  echo 'LICENSE_ENABLED=true' >> .env
 fi
+mkdir -p storage
 
 echo "==> Rebuild + restart (postgres/redis/api/web/worker)..."
 docker compose -f infra/docker/docker-compose.yml up -d --build

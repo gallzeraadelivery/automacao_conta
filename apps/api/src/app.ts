@@ -14,10 +14,13 @@ import { pendingActionsRouter } from "./routes/pendingActions.routes";
 import { deliveriesRouter } from "./routes/deliveries.routes";
 import { reportsRouter } from "./routes/reports.routes";
 import { settingsRouter } from "./routes/settings.routes";
+import { createLicenseRouter } from "./routes/license.routes";
 import { errorHandler, notFoundHandler } from "./middleware/errorHandler";
+import type { LicenseGuard } from "@uber-automation/license-client";
 
 export interface CreateAppOptions {
   assertLicensed?: () => void;
+  getLicenseGuard?: () => LicenseGuard;
 }
 
 export function createApp(options: CreateAppOptions = {}): Express {
@@ -35,9 +38,13 @@ export function createApp(options: CreateAppOptions = {}): Express {
 
   app.get("/health", (_req, res) => res.json({ success: true, data: { status: "ok" } }));
 
+  if (options.getLicenseGuard) {
+    app.use("/api/license", createLicenseRouter(options.getLicenseGuard));
+  }
+
   if (options.assertLicensed) {
     app.use((req, res, next) => {
-      if (req.path === "/health") {
+      if (req.path === "/health" || req.path.startsWith("/api/license")) {
         next();
         return;
       }
@@ -45,9 +52,11 @@ export function createApp(options: CreateAppOptions = {}): Express {
         options.assertLicensed!();
         next();
       } catch (error) {
+        const message = (error as Error).message || "Licenca invalida ou revogada";
+        const code = message === "LICENSE_REQUIRED" ? "LICENSE_REQUIRED" : "LICENSE_DENIED";
         res.status(403).json({
           success: false,
-          error: { message: (error as Error).message || "Licença inválida ou revogada" },
+          error: { code, message },
         });
       }
     });

@@ -148,41 +148,12 @@ if ($envText -match '(?m)^AUTOMATION_TARGET=mock\s*$') {
 if ($envText -notmatch '(?m)^AUTOMATION_TARGET=') {
   Add-Content -Path ".env" -Value "`nAUTOMATION_TARGET=production"
 }
+if ($envText -notmatch '(?m)^LICENSE_ENABLED=') {
+  Add-Content -Path ".env" -Value "`nLICENSE_ENABLED=true"
+}
 
-$envText = Get-Content ".env" -Raw
-if ($envText -match '(?m)^LICENSE_KEY=GD-XXXX-XXXX\s*$' -or $envText -notmatch '(?m)^LICENSE_KEY=') {
-  Write-Host ""
-  Write-Host "==> Chave de licenca (formato GD-XXXX-XXXX)"
-  Write-Host "    Gere em https://automacao.gdapps.online"
-  Write-Host "    Pressione Enter sem digitar para instalar sem licenca (configure depois no .env)."
-  $licenseInput = Read-Host "LICENSE_KEY"
-  if ($null -eq $licenseInput) { $licenseInput = "" }
-  $licenseInput = $licenseInput.Trim().ToUpperInvariant()
-  if ($licenseInput) {
-    if ($envText -match '(?m)^LICENSE_KEY=') {
-      $envText = $envText -replace '(?m)^LICENSE_KEY=.*$', "LICENSE_KEY=$licenseInput"
-    } else {
-      $envText += "`nLICENSE_KEY=$licenseInput"
-    }
-    if ($envText -notmatch '(?m)^LICENSE_ENABLED=') {
-      $envText += "`nLICENSE_ENABLED=true"
-    } else {
-      $envText = $envText -replace '(?m)^LICENSE_ENABLED=.*$', 'LICENSE_ENABLED=true'
-    }
-    Set-Content -Path ".env" -Value $envText -NoNewline
-  } else {
-    Write-Host "    Sem chave agora - desabilitando licenca (LICENSE_ENABLED=false)."
-    Write-Host "    Depois edite .env com LICENSE_KEY e LICENSE_ENABLED=true"
-    if ($envText -match '(?m)^LICENSE_ENABLED=') {
-      $envText = $envText -replace '(?m)^LICENSE_ENABLED=.*$', 'LICENSE_ENABLED=false'
-    } else {
-      $envText += "`nLICENSE_ENABLED=false"
-    }
-    if ($envText -match '(?m)^LICENSE_KEY=GD-XXXX-XXXX') {
-      $envText = $envText -replace '(?m)^LICENSE_KEY=GD-XXXX-XXXX\s*$', 'LICENSE_KEY='
-    }
-    Set-Content -Path ".env" -Value $envText -NoNewline
-  }
+if (-not (Test-Path "storage")) {
+  New-Item -ItemType Directory -Path "storage" | Out-Null
 }
 
 if (-not (Test-Path ".secrets.key")) {

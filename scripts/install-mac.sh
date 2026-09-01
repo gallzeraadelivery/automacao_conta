@@ -216,21 +216,10 @@ if ! grep -q '^AUTOMATION_TARGET=' .env 2>/dev/null; then
   echo 'AUTOMATION_TARGET=production' >> .env
 fi
 
-# Licença GD-XXXX-XXXX (obrigatória para API/worker subirem com LICENSE_ENABLED=true)
-if grep -q '^LICENSE_KEY=GD-XXXX-XXXX' .env 2>/dev/null || ! grep -q '^LICENSE_KEY=' .env 2>/dev/null; then
-  echo ""
-  echo "==> Chave de licença (formato GD-XXXX-XXXX)"
-  echo "    Gere em https://automacao.gdapps.online ou deixe em branco e configure depois no .env"
-  read -r -p "LICENSE_KEY: " LICENSE_INPUT || true
-  LICENSE_INPUT="$(echo "${LICENSE_INPUT:-}" | tr '[:lower:]' '[:upper:]' | xargs)"
-  if [[ -n "${LICENSE_INPUT}" ]]; then
-    if grep -q '^LICENSE_KEY=' .env 2>/dev/null; then
-      sed -i '' "s/^LICENSE_KEY=.*/LICENSE_KEY=${LICENSE_INPUT}/" .env
-    else
-      echo "LICENSE_KEY=${LICENSE_INPUT}" >> .env
-    fi
-  fi
+if ! grep -q '^LICENSE_ENABLED=' .env 2>/dev/null; then
+  echo 'LICENSE_ENABLED=true' >> .env
 fi
+mkdir -p storage
 
 if [[ ! -f .secrets.key ]]; then
   echo "==> Gerando .secrets.key"
