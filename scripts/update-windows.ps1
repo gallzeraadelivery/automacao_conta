@@ -3,6 +3,7 @@ $ErrorActionPreference = "Continue"
 $Root = Resolve-Path (Join-Path $PSScriptRoot "..")
 Set-Location $Root
 . (Join-Path $PSScriptRoot "docker-windows.ps1")
+. (Join-Path $PSScriptRoot "node-windows.ps1")
 
 $LogFile = Join-Path $Root "update-windows.log"
 function Write-Log([string]$Message) {
@@ -132,8 +133,9 @@ docker exec uber-automation-worker-1 printenv AUTOMATION_TARGET 2>$null | ForEac
   Write-Log "    AUTOMATION_TARGET=$_"
 }
 
-Refresh-Path
-if (Get-Command pnpm -ErrorAction SilentlyContinue) {
+Refresh-PathEnv
+Add-UserNpmToPath
+if (Test-CommandExists "pnpm") {
   Write-Log "==> Atualizando deps do painel (pnpm)..."
   pnpm install --frozen-lockfile 2>&1 | ForEach-Object { Write-Log "    $_" }
   if ($LASTEXITCODE -ne 0) {

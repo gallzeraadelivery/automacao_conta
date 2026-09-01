@@ -3,6 +3,7 @@ $ErrorActionPreference = "Stop"
 $Root = Resolve-Path (Join-Path $PSScriptRoot "..")
 Set-Location $Root
 . (Join-Path $PSScriptRoot "docker-windows.ps1")
+. (Join-Path $PSScriptRoot "node-windows.ps1")
 
 Ensure-DockerReady
 
@@ -26,6 +27,7 @@ if (-not $webOk) {
 if (-not (Test-Path "apps\desktop-shell\node_modules\electron")) {
   Write-Host "==> Instalando Electron do painel..."
   Refresh-PathEnv
+  Add-UserNpmToPath
   if (Test-CommandExists "pnpm") {
     pnpm install --filter "@uber-automation/desktop-shell..."
   } elseif (Test-CommandExists "npm") {

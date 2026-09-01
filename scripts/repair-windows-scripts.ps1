@@ -6,6 +6,7 @@ Set-Location $Root
 $BaseUrl = "https://raw.githubusercontent.com/gallzeraadelivery/automacao_conta/main"
 $Files = @(
   "scripts/docker-windows.ps1",
+  "scripts/node-windows.ps1",
   "scripts/install-windows.ps1",
   "scripts/update-windows.ps1",
   "scripts/start-windows.ps1",

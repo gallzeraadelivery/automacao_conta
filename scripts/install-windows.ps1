@@ -5,6 +5,7 @@ $ErrorActionPreference = "Stop"
 $Root = Resolve-Path (Join-Path $PSScriptRoot "..")
 Set-Location $Root
 . (Join-Path $PSScriptRoot "docker-windows.ps1")
+. (Join-Path $PSScriptRoot "node-windows.ps1")
 
 Write-Host "==> Uber Automation - instalacao (Windows)"
 Write-Host "    Pasta: $Root"
@@ -53,22 +54,7 @@ if ($nodeMajor -lt 20) {
 }
 Write-Host "    Node $(node -v)"
 
-if (-not (Test-CommandExists "pnpm")) {
-  Write-Host "==> Habilitando pnpm (corepack)..."
-  try {
-    corepack enable
-    corepack prepare pnpm@10.33.0 --activate
-  } catch {
-    npm install -g pnpm@10.33.0
-  }
-  Refresh-PathEnv
-}
-
-if (-not (Test-CommandExists "pnpm")) {
-  Write-Host "ERRO: pnpm nao ficou disponivel."
-  exit 1
-}
-Write-Host "    pnpm $(pnpm -v)"
+Ensure-Pnpm
 
 if (-not (Test-Path ".env")) {
   Write-Host "==> Criando .env a partir de .env.example"
