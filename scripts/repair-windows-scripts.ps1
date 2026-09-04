@@ -13,7 +13,10 @@ $Files = @(
   "INSTALAR-Windows.bat",
   "ATUALIZAR-Windows.bat",
   "DIAGNOSTICO-Windows.bat",
-  "CORRIGIR-Scripts-Windows.bat"
+  "SUBIR-Containers-Windows.bat",
+  "scripts/subir-containers-windows.ps1",
+  "RESET-Admin-Windows.bat",
+  "scripts/reset-admin-windows.ps1",
 )
 
 Write-Host "==> Corrigindo scripts em: $Root"

@@ -8,15 +8,22 @@ Set-Location $Root
 . (Join-Path $PSScriptRoot "docker-windows.ps1")
 . (Join-Path $PSScriptRoot "node-windows.ps1")
 
-Write-Host "==> Uber Automation - instalacao (Windows)"
-Write-Host "    Pasta: $Root"
-Write-Host "    PowerShell: $($PSVersionTable.PSVersion)"
-Write-Host ""
+$LogFile = Join-Path $Root "install-windows.log"
+function Write-Log([string]$Message) {
+  Write-Host $Message
+  Add-Content -Path $LogFile -Value "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] $Message" -Encoding UTF8
+}
+
+Write-Log "==> Uber Automation - instalacao (Windows)"
+Write-Log "    Pasta: $Root"
+Write-Log "    PowerShell: $($PSVersionTable.PSVersion)"
+Write-Log "    Log: $LogFile"
+Write-Log ""
 
 Ensure-WindowsPrerequisites
 
 if (-not (Test-Path ".env")) {
-  Write-Host "==> Criando .env a partir de .env.example"
+  Write-Log "==> Criando .env a partir de .env.example"
   Copy-Item ".env.example" ".env"
   $access = -join ((1..32) | ForEach-Object { "{0:x2}" -f (Get-Random -Max 256) })
   $refresh = -join ((1..32) | ForEach-Object { "{0:x2}" -f (Get-Random -Max 256) })
@@ -30,7 +37,7 @@ if (-not (Test-Path ".env")) {
 
 $envText = Get-Content ".env" -Raw
 if ($envText -match '(?m)^AUTOMATION_TARGET=mock\s*$') {
-  Write-Host "==> Ajustando AUTOMATION_TARGET=production no .env"
+  Write-Log "==> Ajustando AUTOMATION_TARGET=production no .env"
   $envText = $envText -replace '(?m)^AUTOMATION_TARGET=mock\s*$', 'AUTOMATION_TARGET=production'
   Set-Content -Path ".env" -Value $envText -NoNewline
 }
@@ -46,30 +53,30 @@ if (-not (Test-Path "storage")) {
 }
 
 if (-not (Test-Path ".secrets.key")) {
-  Write-Host "==> Gerando .secrets.key"
+  Write-Log "==> Gerando .secrets.key"
   $key = -join ((1..32) | ForEach-Object { "{0:x2}" -f (Get-Random -Max 256) })
   Set-Content -Path ".secrets.key" -Value $key -NoNewline
 }
 
-Write-Host "==> Instalando dependencias do monorepo (painel em janela)..."
+# Containers PRIMEIRO (mais importante) — build demora na 1a vez
+Start-AutomationStack -Root $Root -Build -OnLine { param($Line) Write-Log $Line }
+
+if (-not (Verify-StackRunning -Root $Root -OnLine { param($Line) Write-Log $Line })) {
+  exit 1
+}
+
+Write-Log "==> Instalando dependencias do monorepo (painel em janela)..."
 if ((Invoke-PnpmTry install --frozen-lockfile) -ne 0) {
   Invoke-Pnpm install
 }
 
-Write-Host "==> Subindo stack Docker (postgres, redis, api, web, worker)..."
-docker compose -f infra/docker/docker-compose.yml up -d --build
-if ($LASTEXITCODE -ne 0) {
-  Write-Host "ERRO: docker compose falhou (codigo $LASTEXITCODE)."
-  exit 1
-}
-
-Write-Host "==> Aguardando API ficar saudavel..."
+Write-Log "==> Aguardando API ficar saudavel..."
 $ok = $false
 for ($i = 1; $i -le 60; $i++) {
   try {
     $r = Invoke-WebRequest -Uri "http://127.0.0.1:4000/health" -UseBasicParsing -TimeoutSec 3
     if ($r.StatusCode -ge 200 -and $r.StatusCode -lt 500) {
-      Write-Host "    API OK"
+      Write-Log "    API OK"
       $ok = $true
       break
     }
@@ -78,24 +85,23 @@ for ($i = 1; $i -le 60; $i++) {
   }
 }
 if (-not $ok) {
-  Write-Host "AVISO: API ainda nao respondeu - ative a licenca no painel (/licenca)."
+  Write-Log "AVISO: API ainda nao respondeu - ative a licenca no painel (http://localhost:3000/licenca)."
 }
 
-Write-Host "==> Seed do admin (se ainda nao existir)..."
-if ((Invoke-PnpmTry db:migrate) -ne 0) {
-  Write-Host "    (migrate ignorado ou ja rodou)"
+Write-Log "==> Seed do admin..."
+if (-not (Invoke-DatabaseMigrate -Root $Root -OnLine { param($Line) Write-Log $Line })) {
+  Write-Log "AVISO: migrate falhou - tente RESET-Admin-Windows.bat depois."
 }
-$env:SEED_ADMIN_EMAIL = if ($env:SEED_ADMIN_EMAIL) { $env:SEED_ADMIN_EMAIL } else { "admin@example.com" }
-$env:SEED_ADMIN_PASSWORD = if ($env:SEED_ADMIN_PASSWORD) { $env:SEED_ADMIN_PASSWORD } else { "admin123" }
-if ((Invoke-PnpmTry db:seed) -ne 0) {
-  Write-Host "    (seed ignorado - provavelmente ja rodou)"
+if (-not (Invoke-DatabaseSeed -Root $Root -ResetPassword -OnLine { param($Line) Write-Log $Line })) {
+  Write-Log "AVISO: seed falhou - rode RESET-Admin-Windows.bat"
 }
 
-Write-Host ""
-Write-Host "=============================================="
-Write-Host " Instalacao concluida."
-Write-Host " Para abrir o painel em JANELA:"
-Write-Host "   - Clique duas vezes em: Iniciar-Windows.bat"
-Write-Host " Login: admin@example.com / admin123"
-Write-Host " Licenca: abra o painel e ative em /licenca"
-Write-Host "=============================================="
+Write-Log ""
+Write-Log "=============================================="
+Write-Log " Instalacao concluida."
+Write-Log " Painel: http://localhost:3000"
+Write-Log " Janela: Iniciar-Windows.bat"
+Write-Log " Login: admin@example.com / admin123"
+Write-Log " Licenca: http://localhost:3000/licenca"
+Write-Log " Log: $LogFile"
+Write-Log "=============================================="

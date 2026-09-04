@@ -19,8 +19,11 @@ config({ path: path.resolve(__dirname, "../../../.env") });
 async function main() {
   const companyName = process.env.SEED_COMPANY_NAME ?? "Empresa Demo";
   const adminEmail = (process.env.SEED_ADMIN_EMAIL ?? "admin@example.com").toLowerCase();
-  const adminPassword = process.env.SEED_ADMIN_PASSWORD ?? "ChangeMe123!";
+  const adminPassword = process.env.SEED_ADMIN_PASSWORD ?? "admin123";
   const adminName = process.env.SEED_ADMIN_NAME ?? "Administrador";
+  const resetPassword =
+    process.env.SEED_ADMIN_RESET_PASSWORD === "1" ||
+    process.env.SEED_ADMIN_RESET_PASSWORD === "true";
 
   let [company] = await db.select().from(companies).where(eq(companies.name, companyName)).limit(1);
   if (!company) {
@@ -52,6 +55,14 @@ async function main() {
     const operator = insertedOperators[0]!;
     console.log(`Operador admin criado: ${operator.email}`);
     console.log(`Senha inicial: ${adminPassword} (troque assim que possível)`);
+  } else if (resetPassword) {
+    const passwordHash = await hashPassword(adminPassword);
+    await db
+      .update(operators)
+      .set({ passwordHash })
+      .where(eq(operators.email, adminEmail));
+    console.log(`Senha do admin atualizada: ${existingOperator.email}`);
+    console.log(`Nova senha: ${adminPassword}`);
   } else {
     console.log(`Operador já existia: ${existingOperator.email}`);
   }

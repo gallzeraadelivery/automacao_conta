@@ -157,3 +157,166 @@ function Ensure-DockerReady {
     exit 1
   }
 }
+
+function Get-ComposeFile([string]$Root) {
+  return Join-Path $Root "infra\docker\docker-compose.yml"
+}
+
+function Start-AutomationStack {
+  param(
+    [string]$Root,
+    [switch]$Build,
+    [scriptblock]$OnLine = { param($Line) Write-Host $Line }
+  )
+
+  $compose = Get-ComposeFile $Root
+  if (-not (Test-Path $compose)) {
+    & $OnLine "ERRO: arquivo compose nao encontrado: $compose"
+    exit 1
+  }
+  if (-not (Test-Path (Join-Path $Root ".env"))) {
+    & $OnLine "ERRO: .env nao encontrado. Rode INSTALAR-Windows.bat de novo."
+    exit 1
+  }
+
+  & $OnLine "==> Subindo stack Docker (postgres, redis, api, web, worker)..."
+  & $OnLine "    ATENCAO: na 1a vez o build pode demorar 15-30 minutos. Nao feche esta janela."
+
+  Push-Location $Root
+  try {
+    if ($Build) {
+      docker compose -f $compose up -d --build 2>&1 | ForEach-Object { & $OnLine "    $_" }
+    } else {
+      docker compose -f $compose up -d 2>&1 | ForEach-Object { & $OnLine "    $_" }
+    }
+    if ($LASTEXITCODE -ne 0) {
+      & $OnLine "ERRO: docker compose falhou (codigo $LASTEXITCODE)."
+      exit 1
+    }
+  } finally {
+    Pop-Location
+  }
+}
+
+function Show-StackStatus {
+  param(
+    [string]$Root,
+    [scriptblock]$OnLine = { param($Line) Write-Host $Line }
+  )
+  $compose = Get-ComposeFile $Root
+  Push-Location $Root
+  try {
+    & $OnLine ""
+    & $OnLine "==> Containers no Docker:"
+    docker compose -f $compose ps 2>&1 | ForEach-Object { & $OnLine $_ }
+  } finally {
+    Pop-Location
+  }
+}
+
+function Test-ComposeServiceRunning([string]$ComposeFile, [string]$Service) {
+  $id = docker compose -f $ComposeFile ps -q $Service 2>$null
+  if (-not $id) { return $false }
+  $state = docker inspect -f "{{.State.Status}}" $id 2>$null
+  return ($state -eq "running")
+}
+
+function Verify-StackRunning {
+  param(
+    [string]$Root,
+    [scriptblock]$OnLine = { param($Line) Write-Host $Line }
+  )
+
+  $compose = Get-ComposeFile $Root
+  $required = @("postgres", "redis", "api", "web", "worker")
+  $missing = @()
+
+  Push-Location $Root
+  try {
+    foreach ($svc in $required) {
+      if (-not (Test-ComposeServiceRunning $compose $svc)) {
+        $missing += $svc
+      }
+    }
+  } finally {
+    Pop-Location
+  }
+
+  Show-StackStatus $Root $OnLine
+
+  if ($missing.Count -gt 0) {
+    & $OnLine ""
+    & $OnLine "ERRO: estes containers NAO estao Running: $($missing -join ', ')"
+    & $OnLine "    Tente: SUBIR-Containers-Windows.bat"
+    & $OnLine "    Ou veja o erro: docker compose -f infra/docker/docker-compose.yml logs api"
+    return $false
+  }
+
+  & $OnLine "    Todos os containers OK."
+  return $true
+}
+
+function Invoke-DatabaseMigrate {
+  param(
+    [string]$Root,
+    [scriptblock]$OnLine = { param($Line) Write-Host $Line }
+  )
+  $compose = Get-ComposeFile $Root
+  Push-Location $Root
+  try {
+    & $OnLine "==> Migrando banco de dados..."
+    docker compose -f $compose exec -T api pnpm --filter @uber-automation/database db:migrate 2>&1 |
+      ForEach-Object { & $OnLine $_ }
+    if ($LASTEXITCODE -ne 0) {
+      & $OnLine "ERRO: migrate falhou (codigo $LASTEXITCODE)."
+      return $false
+    }
+    return $true
+  } finally {
+    Pop-Location
+  }
+}
+
+function Invoke-DatabaseSeed {
+  param(
+    [string]$Root,
+    [string]$Email = "admin@example.com",
+    [string]$Password = "admin123",
+    [switch]$ResetPassword,
+    [scriptblock]$OnLine = { param($Line) Write-Host $Line }
+  )
+  $compose = Get-ComposeFile $Root
+  $pgUser = "uber_automation"
+  $pgDb = "uber_automation"
+  $envPath = Join-Path $Root ".env"
+  if (Test-Path $envPath) {
+    $envContent = Get-Content $envPath -Raw
+    if ($envContent -match '(?m)^POSTGRES_USER=(.+)$') { $pgUser = $matches[1].Trim() }
+    if ($envContent -match '(?m)^POSTGRES_DB=(.+)$') { $pgDb = $matches[1].Trim() }
+  }
+
+  Push-Location $Root
+  try {
+    if ($ResetPassword) {
+      & $OnLine "==> Removendo admin antigo (se existir)..."
+      $safeEmail = $Email.Replace("'", "''")
+      $sql = "DELETE FROM operators WHERE lower(email) = lower('$safeEmail');"
+      docker compose -f $compose exec -T postgres psql -U $pgUser -d $pgDb -c $sql 2>&1 |
+        ForEach-Object { & $OnLine $_ }
+    }
+
+    & $OnLine "==> Criando usuario admin ($Email)..."
+    docker compose -f $compose exec -T `
+      -e "SEED_ADMIN_EMAIL=$Email" `
+      -e "SEED_ADMIN_PASSWORD=$Password" `
+      api pnpm --filter @uber-automation/database db:seed 2>&1 |
+      ForEach-Object { & $OnLine $_ }
+    if ($LASTEXITCODE -ne 0) {
+      & $OnLine "ERRO: seed falhou (codigo $LASTEXITCODE)."
+      return $false
+    }
+    return $true
+  } finally {
+    Pop-Location
+  }
+}

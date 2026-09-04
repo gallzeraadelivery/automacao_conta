@@ -276,11 +276,18 @@ for i in $(seq 1 60); do
   fi
 done
 
-echo "==> Seed do admin (se ainda não existir)..."
-pnpm db:migrate 2>/dev/null || true
-SEED_ADMIN_EMAIL="${SEED_ADMIN_EMAIL:-admin@example.com}" \
-SEED_ADMIN_PASSWORD="${SEED_ADMIN_PASSWORD:-admin123}" \
-  pnpm db:seed 2>/dev/null || echo "    (seed ignorado — provavelmente já rodou)"
+echo "==> Migrando banco e criando admin..."
+docker compose -f infra/docker/docker-compose.yml exec -T api \
+  pnpm --filter @uber-automation/database db:migrate 2>/dev/null || true
+docker compose -f infra/docker/docker-compose.yml exec -T postgres \
+  psql -U "${POSTGRES_USER:-uber_automation}" -d "${POSTGRES_DB:-uber_automation}" \
+  -c "DELETE FROM operators WHERE lower(email) = lower('${SEED_ADMIN_EMAIL:-admin@example.com}');" \
+  2>/dev/null || true
+docker compose -f infra/docker/docker-compose.yml exec -T \
+  -e SEED_ADMIN_EMAIL="${SEED_ADMIN_EMAIL:-admin@example.com}" \
+  -e SEED_ADMIN_PASSWORD="${SEED_ADMIN_PASSWORD:-admin123}" \
+  api pnpm --filter @uber-automation/database db:seed 2>/dev/null \
+  || echo "    (seed falhou — veja logs da API/postgres)"
 
 chmod +x \
   "$ROOT/INSTALAR-Mac.command" \

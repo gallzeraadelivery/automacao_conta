@@ -103,10 +103,8 @@ function Ensure-EnvFile {
 
 Ensure-EnvFile
 
-Write-Log "==> Rebuild + restart (postgres/redis/api/web/worker)..."
-docker compose -f infra/docker/docker-compose.yml up -d --build 2>&1 | ForEach-Object { Write-Log "    $_" }
-if ($LASTEXITCODE -ne 0) {
-  Write-Log "ERRO: docker compose falhou (codigo $LASTEXITCODE)."
+Start-AutomationStack -Root $Root -Build -OnLine { param($Line) Write-Log $Line }
+if (-not (Verify-StackRunning -Root $Root -OnLine { param($Line) Write-Log $Line })) {
   exit 1
 }
 
@@ -127,6 +125,9 @@ for ($i = 1; $i -le 60; $i++) {
 if (-not $apiOk) {
   Write-Log "AVISO: API ainda nao respondeu - confira licenca no .env ou logs da API."
 }
+
+Write-Log "==> Migrando banco..."
+Invoke-DatabaseMigrate -Root $Root -OnLine { param($Line) Write-Log $Line } | Out-Null
 
 Write-Log "==> Conferindo worker..."
 docker exec uber-automation-worker-1 printenv AUTOMATION_TARGET 2>$null | ForEach-Object {
