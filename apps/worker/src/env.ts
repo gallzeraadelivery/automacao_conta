@@ -72,6 +72,7 @@ const envSchema = z.object({
   LICENSE_SERVER_URL: z.string().url().default("https://automacao.gdapps.online"),
   LICENSE_KEY: z.string().optional(),
   LICENSE_KEY_FILE: z.string().optional(),
+  LICENSE_MACHINE_ID_FILE: z.string().optional(),
   LICENSE_HEARTBEAT_MS: z.coerce.number().int().min(60_000).default(900_000),
 });
 

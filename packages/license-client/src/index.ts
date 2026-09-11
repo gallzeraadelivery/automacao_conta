@@ -24,6 +24,8 @@ export interface LicenseGuardConfig {
   serverUrl: string;
   licenseKey?: string;
   licenseKeyFile?: string;
+  /** Se definido, persiste o machine-id neste caminho (ex.: volume Docker). */
+  machineIdFile?: string;
   baseDir: string;
   appVersion?: string;
   heartbeatMs?: number;
@@ -205,7 +207,9 @@ export async function ensureLicensed(options: LicenseClientOptions): Promise<Lic
 export async function startLicenseGuard(config: LicenseGuardConfig): Promise<LicenseGuard> {
   const baseDir = config.baseDir;
   const keyFile = config.licenseKeyFile ?? resolveLicenseKeyFile(baseDir);
-  const machineIdFile = resolveMachineIdFile(baseDir);
+  // Só usa caminho customizado se o caller passar (Docker: volume storage/).
+  // Instalacoes locais continuam com `.license-machine-id` na raiz.
+  const machineIdFile = config.machineIdFile?.trim() || resolveMachineIdFile(baseDir);
   const machineId = getOrCreateMachineId(machineIdFile);
 
   if (!config.enabled) {

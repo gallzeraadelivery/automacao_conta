@@ -45,6 +45,7 @@ services:
       # Mesmo volume do worker — download de cookies / delete de perfil.
       BROWSER_PROFILES_STORAGE_PATH: /app/storage/browser-profiles
       LICENSE_KEY_FILE: /app/storage/host/license.key
+      LICENSE_MACHINE_ID_FILE: /app/storage/host/.license-machine-id
     ports:
       - "${API_PORT:-4000}:4000"
     volumes:
@@ -104,6 +105,7 @@ services:
       # Blacklist de placeholders (hub + SMS) — bind mount para não zerar no rebuild.
       UBER_PLACEHOLDER_PHONE_POOL_PATH: /app/apps/worker/storage/placeholder-phones-used.json
       LICENSE_KEY_FILE: /app/storage/host/license.key
+      LICENSE_MACHINE_ID_FILE: /app/storage/host/.license-machine-id
     ports:
       # noVNC: abra http://localhost:6080/vnc.html para ver o Electron headed
       - "6080:6080"
