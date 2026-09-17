@@ -5,9 +5,10 @@ Proteção por chave **`GD-XXXX-XXXX`** com servidor central em **https://automa
 ## Fluxo
 
 1. Admin gera chave no painel (`automacao.gdapps.online`)
-2. Cliente coloca `LICENSE_KEY=GD-...` no `.env` da instalação
-3. API e worker fazem **activate** na subida + **heartbeat** a cada 15 min
-4. Revogar no painel bloqueia a instalação no próximo heartbeat/job
+2. Cliente ativa no painel local (`http://localhost:3000/licenca`) — grava `storage/license.key`
+3. API e worker leem **primeiro** o arquivo; `LICENSE_KEY` no `.env` so e fallback
+4. **activate** na subida + **heartbeat** a cada 15 min
+5. Revogar no painel bloqueia a instalação no próximo heartbeat/job
 
 ## Painel admin
 
@@ -22,7 +23,8 @@ Variáveis no `.env`:
 ```env
 LICENSE_ENABLED=true
 LICENSE_SERVER_URL=https://automacao.gdapps.online
-LICENSE_KEY=GD-A7K2-9M4P
+# Opcional — preferivel ativar em /licenca (storage/license.key tem prioridade)
+# LICENSE_KEY=GD-A7K2-9M4P
 LICENSE_HEARTBEAT_MS=900000
 ```
 

@@ -140,6 +140,7 @@ Feche a janela do painel normalmente (Cmd+Q / Alt+F4).
 | Login: **Unexpected server error** | Mac: `CORRIGIR-Login-Admin-Mac.command` · Windows: `CORRIGIR-Login-Admin-Windows.bat` (migrate + seed admin) |
 | Build `target api` / Playwright | `git pull` e rebuild; se log citar proxy `45.79...`: rode `CORRIGIR-Proxy-Docker-Mac.command` |
 | Licença pede de novo a cada restart | Atualize a `main` (machine-id em `storage/`) e confira `storage/license.key` |
+| Worker: **Chave de licença inválida** | `storage/license.key` tem prioridade; comente `LICENSE_KEY` no `.env`, ative em `/licenca`, `restart api worker` |
 ## Arquivos desta melhoria
 
 - `apps/desktop-shell/` — app Electron (janela do painel)  

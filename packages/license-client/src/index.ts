@@ -265,11 +265,18 @@ export async function startLicenseGuard(config: LicenseGuardConfig): Promise<Lic
   }
 
   function resolveConfiguredKey(): string | null {
+    // Arquivo do painel (/licenca) tem prioridade sobre LICENSE_KEY no .env.
+    // Caso contrario, um placeholder/chave antiga no .env sobrescreve a ativacao
+    // e o worker fica com "Chave de licenca invalida" mesmo apos ativar no UI.
+    const fromFile = readLicenseKeyFromFile(keyFile);
+    if (fromFile) {
+      return fromFile;
+    }
     const fromEnv = config.licenseKey?.trim();
     if (fromEnv && isValidLicenseKeyFormat(fromEnv)) {
       return normalizeLicenseKey(fromEnv);
     }
-    return readLicenseKeyFromFile(keyFile);
+    return null;
   }
 
   async function loadClient(licenseKey: string): Promise<LicenseClient> {
