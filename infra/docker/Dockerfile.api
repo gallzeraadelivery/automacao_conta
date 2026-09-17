@@ -36,40 +36,11 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/app/.playwright-browsers
 RUN groupadd --system --gid 1001 nodeapp \
   && useradd --system --uid 1001 --gid nodeapp --home-dir /app apiuser
 COPY --from=deps /app ./
-# Instala Chromium com o Playwright do lockfile (proxy-manager).
-# `pnpm exec` na raiz falha ("Command playwright not found") porque nao e
-# dependencia direta do root. Fallback: node .../playwright/cli.js
-# Retry 3x; valida binario no final. --with-deps precisa de root.
-RUN set -eu; \
-  install_chromium() { \
-    if pnpm --filter @uber-automation/proxy-manager exec playwright install --with-deps chromium; then \
-      return 0; \
-    fi; \
-    PW_CLI=$$(find /app/node_modules -path '*/playwright/cli.js' 2>/dev/null | head -1); \
-    if [ -n "$$PW_CLI" ]; then \
-      echo "fallback: node $$PW_CLI install --with-deps chromium"; \
-      node "$$PW_CLI" install --with-deps chromium; \
-      return $$?; \
-    fi; \
-    echo "playwright cli nao encontrado no node_modules"; \
-    return 1; \
-  }; \
-  i=1; \
-  while [ "$$i" -le 3 ]; do \
-    echo "==> playwright install chromium (tentativa $$i/3)"; \
-    if install_chromium; then \
-      break; \
-    fi; \
-    i=$$((i + 1)); \
-    if [ "$$i" -le 3 ]; then sleep 15; fi; \
-  done; \
-  if ! find "$$PLAYWRIGHT_BROWSERS_PATH" -type f \( -name headless_shell -o -name chrome -o -name chromium \) 2>/dev/null | grep -q .; then \
-    echo "ERRO: Chromium do Playwright nao instalado em $$PLAYWRIGHT_BROWSERS_PATH"; \
-    ls -la "$$PLAYWRIGHT_BROWSERS_PATH" 2>/dev/null || true; \
-    find /app/node_modules -path '*/playwright/cli.js' 2>/dev/null | head -10 || true; \
-    exit 1; \
-  fi; \
-  echo "==> Playwright chromium OK"
+COPY infra/docker/install-playwright-chromium.sh /tmp/install-playwright-chromium.sh
+# --with-deps precisa de root (antes do USER apiuser).
+RUN chmod +x /tmp/install-playwright-chromium.sh \
+  && /tmp/install-playwright-chromium.sh @uber-automation/proxy-manager \
+  && rm -f /tmp/install-playwright-chromium.sh
 # chown -R (não só do /app raiz) porque agora existe conteúdo real criado
 # como root nesta stage (.playwright-browsers) além do problema de
 # EACCES no cache do corepack já documentado - mesmo padrão de Dockerfile.worker.

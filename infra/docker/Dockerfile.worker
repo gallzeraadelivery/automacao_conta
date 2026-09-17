@@ -53,39 +53,10 @@ RUN apt-get update \
     libcairo2 \
   && rm -rf /var/lib/apt/lists/*
 
-# Playwright do lockfile via filter worker (+ fallback cli.js). Sem npx --yes.
-RUN set -eu; \
-  install_chromium() { \
-    if pnpm --filter @uber-automation/worker exec playwright install --with-deps chromium; then \
-      return 0; \
-    fi; \
-    PW_CLI=$$(find /app/node_modules -path '*/playwright/cli.js' 2>/dev/null | head -1); \
-    if [ -n "$$PW_CLI" ]; then \
-      echo "fallback: node $$PW_CLI install --with-deps chromium"; \
-      node "$$PW_CLI" install --with-deps chromium; \
-      return $$?; \
-    fi; \
-    echo "playwright cli nao encontrado no node_modules"; \
-    return 1; \
-  }; \
-  i=1; \
-  while [ "$$i" -le 3 ]; do \
-    echo "==> playwright install chromium (tentativa $$i/3)"; \
-    if install_chromium; then \
-      break; \
-    fi; \
-    i=$$((i + 1)); \
-    if [ "$$i" -le 3 ]; then sleep 15; fi; \
-  done; \
-  if ! find "$$PLAYWRIGHT_BROWSERS_PATH" -type f \( -name headless_shell -o -name chrome -o -name chromium \) 2>/dev/null | grep -q .; then \
-    echo "ERRO: Chromium do Playwright nao instalado em $$PLAYWRIGHT_BROWSERS_PATH"; \
-    ls -la "$$PLAYWRIGHT_BROWSERS_PATH" 2>/dev/null || true; \
-    find /app/node_modules -path '*/playwright/cli.js' 2>/dev/null | head -10 || true; \
-    exit 1; \
-  fi; \
-  echo "==> Playwright chromium OK"; \
-  pnpm --filter @uber-automation/worker exec playwright install --with-deps chrome \
-    || echo "WARN: canal chrome indisponivel nesta arch — runtime usa chromium"
+COPY infra/docker/install-playwright-chromium.sh /tmp/install-playwright-chromium.sh
+RUN chmod +x /tmp/install-playwright-chromium.sh \
+  && /tmp/install-playwright-chromium.sh @uber-automation/worker also-chrome \
+  && rm -f /tmp/install-playwright-chromium.sh
 
 RUN groupadd --system --gid 1001 nodeworker \
   && useradd --system --uid 1001 --gid nodeworker --home-dir /app workeruser \
