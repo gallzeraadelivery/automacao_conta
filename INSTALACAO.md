@@ -69,6 +69,40 @@ Isso sobe os containers (se estiverem parados) e abre a janela do painel em `htt
 
 (Se você definiu `SEED_ADMIN_*` no ambiente, use esses valores.)
 
+### Login com “Unexpected server error”
+
+Isso **não** é senha errada (senha errada mostra “Email ou senha inválidos”).  
+Costuma ser **banco sem migrate/seed** (tabelas ou admin inexistentes).
+
+| Sistema | Correção rápida |
+|---------|-----------------|
+| **Mac** | Clique em `CORRIGIR-Login-Admin-Mac.command` (ou `bash scripts/fix-admin-login-mac.sh`) |
+| **Windows** | Clique em `CORRIGIR-Login-Admin-Windows.bat` (ou `RESET-Admin-Windows.bat`) |
+
+O script:
+
+1. Sobe os containers se precisarem  
+2. Roda `db:migrate` **dentro** do container `api`  
+3. Recria o admin `admin@example.com` / `admin123`  
+
+Depois abra de novo: http://localhost:3000/login
+
+Manual (qualquer OS):
+
+```bash
+docker compose -f infra/docker/docker-compose.yml exec -T api \
+  pnpm --filter @uber-automation/database db:migrate
+
+docker compose -f infra/docker/docker-compose.yml exec -T postgres \
+  psql -U uber_automation -d uber_automation \
+  -c "DELETE FROM operators WHERE lower(email) = lower('admin@example.com');"
+
+docker compose -f infra/docker/docker-compose.yml exec -T \
+  -e SEED_ADMIN_EMAIL=admin@example.com \
+  -e SEED_ADMIN_PASSWORD=admin123 \
+  api pnpm --filter @uber-automation/database db:seed
+```
+
 ## Comandos manuais (igual ao fluxo atual)
 
 Se preferir sem os scripts:
@@ -103,7 +137,9 @@ Feche a janela do painel normalmente (Cmd+Q / Alt+F4).
 | Porta 3000/4000 ocupada | Pare outro serviço ou mude `WEB_PORT` / `API_PORT` no `.env` e rebuild o web |
 | Janela não abre no Mac (Iniciar) | O script agora carrega nvm sozinho. Se ainda falhar: `git pull` e rode `Iniciar-Mac.command` de novo; ou no Terminal: `source ~/.nvm/nvm.sh && ./scripts/start-mac.sh` |
 | Windows: script bloqueado | Clique em `INSTALAR-Windows.bat` (já usa Bypass); ou `Set-ExecutionPolicy -Scope Process Bypass` |
-
+| Login: **Unexpected server error** | Mac: `CORRIGIR-Login-Admin-Mac.command` · Windows: `CORRIGIR-Login-Admin-Windows.bat` (migrate + seed admin) |
+| Build `target api` / Playwright | `git pull` e rebuild; se log citar proxy `45.79...`: rode `CORRIGIR-Proxy-Docker-Mac.command` |
+| Licença pede de novo a cada restart | Atualize a `main` (machine-id em `storage/`) e confira `storage/license.key` |
 ## Arquivos desta melhoria
 
 - `apps/desktop-shell/` — app Electron (janela do painel)  

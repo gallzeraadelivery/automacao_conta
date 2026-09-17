@@ -17,6 +17,7 @@ $Files = @(
   "scripts/subir-containers-windows.ps1",
   "RESET-Admin-Windows.bat",
   "scripts/reset-admin-windows.ps1",
+  "CORRIGIR-Login-Admin-Windows.bat",
 )
 
 Write-Host "==> Corrigindo scripts em: $Root"
