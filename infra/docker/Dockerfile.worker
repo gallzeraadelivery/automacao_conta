@@ -53,9 +53,25 @@ RUN apt-get update \
     libcairo2 \
   && rm -rf /var/lib/apt/lists/*
 
-RUN npx --yes playwright install --with-deps chromium \
-  && (npx --yes playwright install --with-deps chrome \
-      || echo "WARN: canal chrome indisponível nesta arch — runtime usa chromium")
+# Mesmo padrao da API: Playwright do workspace + retry (sem npx --yes solto).
+RUN set -eu; \
+  i=1; \
+  while [ "$i" -le 3 ]; do \
+    echo "==> playwright install chromium (tentativa $i/3)"; \
+    if pnpm exec playwright install --with-deps chromium; then \
+      break; \
+    fi; \
+    i=$((i + 1)); \
+    if [ "$i" -le 3 ]; then sleep 15; fi; \
+  done; \
+  if ! find "$PLAYWRIGHT_BROWSERS_PATH" -type f \( -name headless_shell -o -name chrome -o -name chromium \) 2>/dev/null | grep -q .; then \
+    echo "ERRO: Chromium do Playwright nao instalado em $PLAYWRIGHT_BROWSERS_PATH"; \
+    ls -la "$PLAYWRIGHT_BROWSERS_PATH" 2>/dev/null || true; \
+    exit 1; \
+  fi; \
+  echo "==> Playwright chromium OK"; \
+  pnpm exec playwright install --with-deps chrome \
+    || echo "WARN: canal chrome indisponivel nesta arch — runtime usa chromium"
 
 RUN groupadd --system --gid 1001 nodeworker \
   && useradd --system --uid 1001 --gid nodeworker --home-dir /app workeruser \

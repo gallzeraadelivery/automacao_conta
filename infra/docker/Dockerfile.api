@@ -36,9 +36,26 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/app/.playwright-browsers
 RUN groupadd --system --gid 1001 nodeapp \
   && useradd --system --uid 1001 --gid nodeapp --home-dir /app apiuser
 COPY --from=deps /app ./
-# --with-deps instala também as bibliotecas de sistema do Chromium (root
-# necessário aqui - por isso roda antes de trocar para o usuário sem privilégios).
-RUN npx --yes playwright install --with-deps chromium
+# Chromium via Playwright do workspace (pnpm exec), NAO `npx --yes playwright`:
+# o npx solto pode baixar outra revisao do browser e quebrar o teste de proxy.
+# Retry 3x cobre rede/disco instavel em maquina nova; no fim valida o binario.
+# --with-deps precisa de root (antes do USER apiuser).
+RUN set -eu; \
+  i=1; \
+  while [ "$i" -le 3 ]; do \
+    echo "==> playwright install chromium (tentativa $i/3)"; \
+    if pnpm exec playwright install --with-deps chromium; then \
+      break; \
+    fi; \
+    i=$((i + 1)); \
+    if [ "$i" -le 3 ]; then sleep 15; fi; \
+  done; \
+  if ! find "$PLAYWRIGHT_BROWSERS_PATH" -type f \( -name headless_shell -o -name chrome -o -name chromium \) 2>/dev/null | grep -q .; then \
+    echo "ERRO: Chromium do Playwright nao instalado em $PLAYWRIGHT_BROWSERS_PATH"; \
+    ls -la "$PLAYWRIGHT_BROWSERS_PATH" 2>/dev/null || true; \
+    exit 1; \
+  fi; \
+  echo "==> Playwright chromium OK"
 # chown -R (não só do /app raiz) porque agora existe conteúdo real criado
 # como root nesta stage (.playwright-browsers) além do problema de
 # EACCES no cache do corepack já documentado - mesmo padrão de Dockerfile.worker.
