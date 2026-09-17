@@ -103,6 +103,21 @@ docker compose -f infra/docker/docker-compose.yml exec -T \
   api pnpm --filter @uber-automation/database db:seed
 ```
 
+### Worker: “Chave de licença inválida” (robô não dispara)
+
+O painel grava em `storage/license.key`. Se o `.env` ainda tiver `LICENSE_KEY=...` antiga, o worker pode falhar (em versões novas o arquivo tem prioridade).
+
+| Sistema | Correção rápida |
+|---------|-----------------|
+| **Mac** | `CORRIGIR-Licenca-Mac.command` |
+| **Windows** | `CORRIGIR-Licenca-Windows.bat` |
+
+Depois ative **uma vez** em http://localhost:3000/licenca se `storage/license.key` não existir, e confira o log:
+
+```bash
+docker compose -f infra/docker/docker-compose.yml logs worker --tail 20
+```
+
 ## Comandos manuais (igual ao fluxo atual)
 
 Se preferir sem os scripts:
@@ -140,7 +155,7 @@ Feche a janela do painel normalmente (Cmd+Q / Alt+F4).
 | Login: **Unexpected server error** | Mac: `CORRIGIR-Login-Admin-Mac.command` · Windows: `CORRIGIR-Login-Admin-Windows.bat` (migrate + seed admin) |
 | Build `target api` / Playwright | `git pull` e rebuild; se log citar proxy `45.79...`: rode `CORRIGIR-Proxy-Docker-Mac.command` |
 | Licença pede de novo a cada restart | Atualize a `main` (machine-id em `storage/`) e confira `storage/license.key` |
-| Worker: **Chave de licença inválida** | `storage/license.key` tem prioridade; comente `LICENSE_KEY` no `.env`, ative em `/licenca`, `restart api worker` |
+| Worker: **Chave de licença inválida** | Mac: `CORRIGIR-Licenca-Mac.command` · Windows: `CORRIGIR-Licenca-Windows.bat` (comenta `LICENSE_KEY` no `.env`, reinicia api/worker; depois ative em `/licenca` se faltar `storage/license.key`) |
 ## Arquivos desta melhoria
 
 - `apps/desktop-shell/` — app Electron (janela do painel)  
