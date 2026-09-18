@@ -156,6 +156,7 @@ Feche a janela do painel normalmente (Cmd+Q / Alt+F4).
 | Build `target api` / Playwright | `git pull` e rebuild; se log citar proxy `45.79...`: rode `CORRIGIR-Proxy-Docker-Mac.command` |
 | Licença pede de novo a cada restart | Atualize a `main` (machine-id em `storage/`) e confira `storage/license.key` |
 | Worker: **Chave de licença inválida** | Mac: `CORRIGIR-Licenca-Mac.command` · Windows: `CORRIGIR-Licenca-Windows.bat` (comenta `LICENSE_KEY` no `.env`, reinicia api/worker; depois ative em `/licenca` se faltar `storage/license.key`) |
+| E-mail: **unable to verify the first certificate** | Só nesse Mac: no `.env` coloque `IMAP_TLS_REJECT_UNAUTHORIZED=false`, depois `docker compose -f infra/docker/docker-compose.yml up -d --build api worker`. Nos outros PCs **não** precisa. |
 ## Arquivos desta melhoria
 
 - `apps/desktop-shell/` — app Electron (janela do painel)  

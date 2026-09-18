@@ -43,6 +43,14 @@ const envSchema = z.object({
   /** Machine-id persistente (Docker: mesmo volume da LICENSE_KEY_FILE). */
   LICENSE_MACHINE_ID_FILE: z.string().optional(),
   LICENSE_HEARTBEAT_MS: z.coerce.number().int().min(60_000).default(900_000),
+  /**
+   * false = aceita cadeia TLS incompleta no IMAP (teste no painel + mesmo
+   * codigo do email-service). Default true. So afeta IMAP.
+   */
+  IMAP_TLS_REJECT_UNAUTHORIZED: z
+    .string()
+    .optional()
+    .transform((v) => v !== "false"),
 });
 
 export const env = envSchema.parse(process.env);

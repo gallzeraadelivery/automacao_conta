@@ -74,6 +74,14 @@ const envSchema = z.object({
   LICENSE_KEY_FILE: z.string().optional(),
   LICENSE_MACHINE_ID_FILE: z.string().optional(),
   LICENSE_HEARTBEAT_MS: z.coerce.number().int().min(60_000).default(900_000),
+  /**
+   * false = aceita cadeia TLS incompleta no IMAP (Spacemail em algumas redes).
+   * Default true (seguro). Nao afeta Uber/proxy — so a leitura de e-mail.
+   */
+  IMAP_TLS_REJECT_UNAUTHORIZED: z
+    .string()
+    .optional()
+    .transform((v) => v !== "false"),
 });
 
 export const env = envSchema.parse(process.env);

@@ -13,7 +13,14 @@ export interface ImapEmailClientOptions {
   port?: number;
   /** Repassado direto pro `ImapFlow` - default da lib é 90s, longo demais pra um botão de teste interativo. */
   connectionTimeout?: number;
+  /**
+   * Default true (seguro). Em alguns Macs/redes o Spacemail falha com
+   * "unable to verify the first certificate" — nesse caso defina
+   * IMAP_TLS_REJECT_UNAUTHORIZED=false no .env (so afeta IMAP).
+   */
+  tlsRejectUnauthorized?: boolean;
 }
+
 
 const DEFAULT_HOST = "imap.gmail.com";
 const DEFAULT_PORT = 993;
@@ -118,6 +125,7 @@ export class ImapEmailClient implements IGmailClient {
   private readonly host: string;
   private readonly port: number;
   private readonly connectionTimeout?: number;
+  private readonly tlsRejectUnauthorized: boolean;
   private client?: ImapFlow;
   /** Último erro de socket emitido pelo ImapFlow (event 'error'). */
   private socketError?: Error;
@@ -126,6 +134,9 @@ export class ImapEmailClient implements IGmailClient {
     this.host = options.host ?? DEFAULT_HOST;
     this.port = options.port ?? DEFAULT_PORT;
     this.connectionTimeout = options.connectionTimeout;
+    // Default seguro; so desliga com IMAP_TLS_REJECT_UNAUTHORIZED=false
+    this.tlsRejectUnauthorized =
+      options.tlsRejectUnauthorized ?? process.env.IMAP_TLS_REJECT_UNAUTHORIZED !== "false";
   }
 
   /**
@@ -167,6 +178,7 @@ export class ImapEmailClient implements IGmailClient {
       // Idle TLS sem resposta (Spacemail) → erro em vez de hang eterno.
       socketTimeout: 60_000,
       greetingTimeout: this.connectionTimeout ?? 20_000,
+      tls: { rejectUnauthorized: this.tlsRejectUnauthorized },
     } as ConstructorParameters<typeof ImapFlow>[0]);
 
     this.bindClient(client);
