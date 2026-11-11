@@ -602,11 +602,24 @@ export async function confirmEarningLocationStep(ctx: RealStepContext): Promise<
   const { page, config } = ctx;
   const navTimeout = Math.max(config.timeouts.pageLoad, 45_000);
 
+  async function declineMarketingSmsIfPresent(): Promise<void> {
+    const heading = page.getByRole("heading", { name: /^stay in the know$/i });
+    const optIn = page.getByRole("button", { name: /^opt-in$/i });
+    const decline = page.getByRole("button", { name: /^no thanks$/i });
+    if (!(await heading.isVisible()) || !(await optIn.isVisible()) || !(await decline.isVisible())) {
+      return;
+    }
+    await decline.click({ timeout: config.timeouts.elementWait });
+    await heading.waitFor({ state: "hidden", timeout: config.timeouts.elementWait });
+    await ctx.recordStep("MARKETING_SMS_DECLINED", {});
+  }
+
   // Só heading/copy da tela Earn/cidade — NÃO usar input/city genérico (bate em
   // My Profile → Language / Address e deixa Next forever disabled).
   async function waitForCityUi(timeoutMs: number): Promise<boolean> {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
+      await declineMarketingSmsIfPresent();
       if (await earnCityUi(page).first().isVisible({ timeout: 600 }).catch(() => false)) {
         return true;
       }
@@ -799,6 +812,7 @@ export async function confirmEarningLocationStep(ctx: RealStepContext): Promise<
   try {
     await dismissCookieBannerIfPresent(page, config.timeouts.elementWait);
     await dismissUberSorryErrorIfPresent(page, config.timeouts.elementWait);
+    await declineMarketingSmsIfPresent();
     const welcomePass1 = await advanceWelcomeBackInterstitialsIfPresent(
       page,
       config.timeouts.elementWait,
