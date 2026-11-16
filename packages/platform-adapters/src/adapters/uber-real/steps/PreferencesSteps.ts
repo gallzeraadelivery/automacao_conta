@@ -603,7 +603,9 @@ export async function confirmEarningLocationStep(ctx: RealStepContext): Promise<
   const navTimeout = Math.max(config.timeouts.pageLoad, 45_000);
 
   async function declineMarketingSmsIfPresent(): Promise<void> {
-    const heading = page.getByRole("heading", { name: /^stay in the know$/i });
+    const heading = page.getByRole("heading", {
+      name: /^(?:stay in the know|see what['’]s new with uber)$/i,
+    });
     const optIn = page.getByRole("button", { name: /^opt-in$/i });
     const decline = page.getByRole("button", { name: /^no thanks$/i });
     if (!(await heading.isVisible()) || !(await optIn.isVisible()) || !(await decline.isVisible())) {
